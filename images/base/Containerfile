@@ -1,0 +1,58 @@
+# Image de base commune à tous les clients IA, sur Red Hat UBI 10.
+# L'image source est passée par install.ps1 / ai-sandbox.ps1 -Rebuild depuis
+# config.psd1 (BaseImage). La valeur ci-dessous ne sert qu'en build manuel.
+ARG BASE_IMAGE=registry.access.redhat.com/ubi10/ubi:latest
+FROM ${BASE_IMAGE}
+
+# Paquets indispensables : le build échoue s'il en manque un.
+# (curl est déjà fourni par curl-minimal dans UBI)
+RUN dnf install -y \
+        git-core sudo shadow-utils which findutils procps-ng tar gzip \
+        python3 python3-pip nodejs npm gcc gcc-c++ make \
+ && dnf clean all
+
+# Outils de confort : installés s'ils existent dans les dépôts configurés
+# (UBI public ou miroir d'entreprise), ignorés sinon.
+RUN for p in jq ripgrep fd-find tree less nano unzip zip wget file diffutils patch; do \
+        dnf install -y "$p" >/dev/null 2>&1 && echo "+ $p" || echo "- $p (absent des dépôts, ignoré)"; \
+    done \
+ && dnf clean all \
+ && rm -rf /var/cache/dnf
+
+# Claude Code et Gemini CLI demandent Node.js >= 20
+RUN node -e 'const m=+process.versions.node.split(".")[0]; if(m<20){console.error("Node.js "+process.versions.node+" trop ancien (>= 20 requis)"); process.exit(1)}' \
+ && echo "Node.js $(node --version), npm $(npm --version), $(python3 --version)"
+
+# Utilisateur "dev" en UID 1000 = utilisateur de la podman machine,
+# mappé grâce à --userns=keep-id. sudo sans mot de passe pour que l'IA
+# puisse installer des outils (confinés au conteneur).
+RUN useradd -m -u 1000 -U -s /bin/bash dev \
+ && echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev \
+ && chmod 0440 /etc/sudoers.d/dev \
+ && mkdir -p /workspace && chown dev:dev /workspace
+
+# Installations npm/pip globales sans sudo, dans le home de dev
+ENV NPM_CONFIG_PREFIX=/home/dev/.npm-global \
+    PATH=/home/dev/.npm-global/bin:/home/dev/.local/bin:$PATH \
+    PIP_BREAK_SYSTEM_PACKAGES=1
+
+# Node utilise les certificats système (utile si l'image interne contient
+# l'autorité de certification de l'entreprise : registre npm, proxy TLS...)
+ENV NODE_EXTRA_CA_CERTS=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+
+USER dev
+RUN mkdir -p /home/dev/.npm-global /home/dev/.local/bin \
+ && git config --global --add safe.directory /workspace
+
+# Registre npm : vide = registre public. Écrit dans ~/.npmrc de dev, donc utilisé
+# pour installer les clients IA ET par l'IA dans la sandbox (npm install, npx).
+ARG NPM_REGISTRY=""
+RUN npm config set cafile /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
+ && if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+ && echo "Registre npm : $(npm config get registry)"
+
+WORKDIR /workspace
+
+# Le conteneur reste vivant (PID 1 fourni par podman run --init) ;
+# chaque session lance le client via "podman exec".
+CMD ["sleep", "infinity"]

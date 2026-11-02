@@ -1,0 +1,9 @@
+# Réglages personnels (clés d'API, gateway) : ne jamais les versionner
+*settings.json
+*.local.json
+.env
+
+# Système
+Thumbs.db
+desktop.ini
+.DS_Store

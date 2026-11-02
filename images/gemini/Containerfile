@@ -1,0 +1,20 @@
+# Gemini CLI dans la sandbox
+FROM localhost/ai-sandbox-base:latest
+
+ARG CLIENT_VERSION=latest
+# Registre npm : hérité de l'image de base (~/.npmrc). Ce paramètre ne sert
+# qu'à le surcharger lors d'un build manuel (--build-arg NPM_REGISTRY=...).
+ARG NPM_REGISTRY=""
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+ && echo "Installation depuis $(npm config get registry)" \
+ && npm install -g @google/gemini-cli@${CLIENT_VERSION} \
+ && gemini --version
+
+# Pas de navigateur dans le conteneur : connexion Google par URL + code à coller
+ENV NO_BROWSER=true
+
+# Configuration de Gemini (réglages, historique) propre à chaque conteneur.
+# settings.json peut y être recopié depuis Windows (config.psd1 > Settings).
+RUN mkdir -p /home/dev/.gemini
+
+LABEL ai-sandbox.client=gemini

@@ -1,0 +1,11 @@
+# Fins de ligne normalisées dans le dépôt (LF), adaptées à la cible au checkout.
+* text=auto eol=lf
+
+# Scripts PowerShell : CRLF sous Windows (les fichiers sont en UTF-8 avec BOM,
+# nécessaire à Windows PowerShell 5.1 pour lire les accents).
+*.ps1  text eol=crlf
+*.psd1 text eol=crlf
+
+# Exécutés dans le conteneur Linux : toujours LF, même sur un checkout Windows.
+*.sh          text eol=lf
+Containerfile text eol=lf
