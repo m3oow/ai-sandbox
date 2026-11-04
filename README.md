@@ -121,8 +121,103 @@ foreach ($b in 'HKCU:\Software\Classes\Directory\shell\AISandbox',
 - `%V` est remplacé par Windows avec le dossier cliqué.
 - Pour l'entrée autonome, ajoutez `-Yolo` avant `-Path`.
 
-Le menu peut aussi se créer avec `regedit` : mêmes clés, mêmes valeurs. Pour le retirer, voir
-« Désinstallation » ci-dessous.
+#### Détail des clés de registre (pour `regedit`)
+
+Tout est sous `HKEY_CURRENT_USER` (HKCU) : pas de droits administrateur. Les deux arborescences
+suivantes sont **identiques** et doivent toutes deux être créées : la première pour le clic
+droit *sur* un dossier, la seconde pour le clic droit *dans* un dossier ouvert (fond de fenêtre).
+
+```
+HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox
+HKEY_CURRENT_USER\Software\Classes\Directory\Background\shell\AISandbox
+```
+
+Arborescence à reproduire sous chacune des deux clés `AISandbox` :
+
+```
+AISandbox
+│   MUIVerb      REG_SZ     Lancer IA sandboxée
+│   SubCommands  REG_SZ     (chaîne vide)
+│   Icon         REG_SZ     <chemin de podman.exe>,0
+└── shell
+    ├── 01-claude
+    │   │   MUIVerb        REG_SZ     Claude
+    │   └── command
+    │         (Par défaut)  REG_SZ     <commande Claude>
+    ├── 02-claude-yolo
+    │   │   MUIVerb        REG_SZ     Claude (autonome)
+    │   └── command
+    │         (Par défaut)  REG_SZ     <commande Claude autonome>
+    ├── 03-gemini
+    │   │   MUIVerb        REG_SZ     Gemini
+    │   │   CommandFlags   REG_DWORD  0x00000020   (séparateur au-dessus de cette entrée)
+    │   └── command
+    │         (Par défaut)  REG_SZ     <commande Gemini>
+    └── 04-gemini-yolo
+        │   MUIVerb        REG_SZ     Gemini (autonome)
+        └── command
+              (Par défaut)  REG_SZ     <commande Gemini autonome>
+```
+
+Points d'attention :
+
+- `SubCommands` doit exister avec une valeur **vide** : c'est ce qui transforme l'entrée en
+  sous-menu déroulant. Sans elle, Windows n'affiche pas les entrées de `shell`.
+- Le préfixe numérique des sous-clés (`01-`, `02-`…) fixe l'ordre d'affichage.
+- `(Par défaut)` est la valeur sans nom de la sous-clé `command`. Dans regedit : double-clic
+  sur `(Par défaut)` puis saisie de la commande.
+- Pour n'avoir que Claude, ne créez que `01-claude` et `02-claude-yolo`.
+- `Icon` : obtenez le chemin avec `(Get-Command podman).Source` ; ajoutez `,0` à la fin
+  (première icône du fichier). Facultatif.
+
+Commandes à saisir (remplacez `<UTILISATEUR>` par votre nom de profil Windows, le chemin doit
+être absolu : regedit n'étend pas `%LOCALAPPDATA%` dans une valeur `REG_SZ`) :
+
+| Entrée | Valeur de `command` |
+|---|---|
+| `01-claude` | `wt.exe -w new powershell.exe -NoProfile -File "C:\Users\<UTILISATEUR>\AppData\Local\ai-sandbox\ai-sandbox.ps1" -Client claude -Path "%V"` |
+| `02-claude-yolo` | idem, avec ` -Yolo` avant ` -Path` |
+| `03-gemini` | idem `01-claude`, avec `-Client gemini` |
+| `04-gemini-yolo` | idem `03-gemini`, avec ` -Yolo` avant ` -Path` |
+
+- `%V` doit rester tel quel : Windows le remplace par le dossier cliqué.
+- Sans Windows Terminal, supprimez le préfixe `wt.exe -w new `.
+- `install.ps1` ajoute en plus `-ExecutionPolicy Bypass` après `-NoProfile`. C'est inutile si
+  vous avez fait `Unblock-File` (étape 2) avec une politique `RemoteSigned`.
+
+**Import par fichier `.reg`** (alternative à la saisie dans regedit) : enregistrez le contenu
+suivant dans un fichier `ai-sandbox-menu.reg` (encodage Unicode/UTF-16 LE, celui de regedit ;
+si vous l'éditez à la main, enregistrez-le ainsi, sinon `sandboxée` sera mal lu), remplacez
+`<UTILISATEUR>` et `<CHEMIN PODMAN>` (antislashs doublés), puis double-cliquez dessus. L'exemple
+couvre Claude ; pour Gemini, dupliquez les blocs `03-gemini` et `04-gemini-yolo` sur le même
+modèle. Le bloc est à répéter pour la seconde racine (`...\Directory\Background\shell\...`).
+
+```
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox]
+"MUIVerb"="Lancer IA sandboxée"
+"SubCommands"=""
+"Icon"="<CHEMIN PODMAN>,0"
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\01-claude]
+"MUIVerb"="Claude"
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\01-claude\command]
+@="wt.exe -w new powershell.exe -NoProfile -File \"C:\\Users\\<UTILISATEUR>\\AppData\\Local\\ai-sandbox\\ai-sandbox.ps1\" -Client claude -Path \"%V\""
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\02-claude-yolo]
+"MUIVerb"="Claude (autonome)"
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\02-claude-yolo\command]
+@="wt.exe -w new powershell.exe -NoProfile -File \"C:\\Users\\<UTILISATEUR>\\AppData\\Local\\ai-sandbox\\ai-sandbox.ps1\" -Client claude -Yolo -Path \"%V\""
+```
+
+Dans un fichier `.reg`, `\` s'écrit `\\` et `"` s'écrit `\"` ; une valeur `REG_DWORD`
+s'écrit `"CommandFlags"=dword:00000020`.
+
+Pour retirer le menu : supprimez les deux clés `AISandbox` (voir « Désinstallation » ci-dessous).
+Le menu apparaît sans redémarrage ; sous Windows 11, il est dans **Afficher plus d'options**.
 
 ## Utilisation
 
