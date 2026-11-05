@@ -54,7 +54,10 @@ if ((Resolve-Path $Src).ProviderPath.TrimEnd('\') -ine $Dest.TrimEnd('\')) {
     # Une configuration déjà installée (ex. image interne) est conservée
     $destConfig = Join-Path $Dest 'config.psd1'
     $savedConfig = if (Test-Path -LiteralPath $destConfig) { Get-Content -LiteralPath $destConfig -Raw -Encoding UTF8 }
-    Copy-Item -Path (Join-Path $Src '*') -Destination $Dest -Recurse -Force
+    # Le dossier .git (historique du dépôt) n'a rien à faire dans le dossier d'installation
+    Get-ChildItem -LiteralPath $Src -Force |
+        Where-Object { $_.Name -ne '.git' } |
+        Copy-Item -Destination $Dest -Recurse -Force
     if ($savedConfig) {
         [IO.File]::WriteAllText($destConfig, $savedConfig, (New-Object Text.UTF8Encoding $true))
         Write-Host "Configuration existante conservée : $destConfig" -ForegroundColor DarkGray
@@ -100,9 +103,9 @@ if (-not $NoBuild) {
 
 $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
 
-function New-MenuCommand([string]$ClientName, [bool]$Autonomous) {
+function New-MenuCommand([string]$ClientName, [string]$Mode) {
     $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -Client $ClientName"
-    if ($Autonomous) { $cmd += ' -Yolo' }
+    if ($Mode -eq 'shell') { $cmd += ' -Shell' }
     $cmd += ' -Path "%V"'
     if ($wt) { return "wt.exe -w new $cmd" }
     return $cmd
@@ -124,19 +127,23 @@ foreach ($b in $bases) {
     $i = 0
     foreach ($name in ($Clients.Keys | Sort-Object)) {
         $label = $Clients[$name].Label
-        foreach ($auto in @($false, $true)) {
+        # Deux entrées par client : session normale, shell dans la sandbox
+        foreach ($mode in @('', 'shell')) {
             $i++
-            $suffix = if ($auto) { '-yolo' } else { '' }
+            $suffix = if ($mode) { "-$mode" } else { '' }
             $key    = "$b\shell\{0:D2}-{1}{2}" -f $i, $name, $suffix
-            $text   = if ($auto) { "$label (autonome)" } else { $label }
+            $text   = switch ($mode) {
+                'shell' { "$label (shell)" }
+                default { $label }
+            }
 
             New-Item -Path "$key\command" -Force | Out-Null
             New-ItemProperty -LiteralPath $key -Name 'MUIVerb' -Value $text -PropertyType String -Force | Out-Null
-            if ($i -gt 1 -and -not $auto) {
+            if ($i -gt 1 -and -not $mode) {
                 # séparateur avant chaque nouveau client
                 New-ItemProperty -LiteralPath $key -Name 'CommandFlags' -Value 0x20 -PropertyType DWord -Force | Out-Null
             }
-            Set-ItemProperty -LiteralPath "$key\command" -Name '(default)' -Value (New-MenuCommand $name $auto)
+            Set-ItemProperty -LiteralPath "$key\command" -Name '(default)' -Value (New-MenuCommand $name $mode)
         }
     }
 }
