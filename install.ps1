@@ -111,7 +111,6 @@ $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
 
 function New-MenuCommand([string]$ClientName, [string]$Mode) {
     $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -Client $ClientName"
-    if ($Mode -eq 'yolo')  { $cmd += ' -Yolo' }
     if ($Mode -eq 'shell') { $cmd += ' -Shell' }
     $cmd += ' -Path "%V"'
     if ($wt) { return "wt.exe -w new $cmd" }
@@ -134,13 +133,12 @@ foreach ($b in $bases) {
     $i = 0
     foreach ($name in ($Clients.Keys | Sort-Object)) {
         $label = $Clients[$name].Label
-        # Trois entrées par client : session normale, autonome, shell dans la sandbox
-        foreach ($mode in @('', 'yolo', 'shell')) {
+        # Deux entrées par client : session normale, shell dans la sandbox
+        foreach ($mode in @('', 'shell')) {
             $i++
             $suffix = if ($mode) { "-$mode" } else { '' }
             $key    = "$b\shell\{0:D2}-{1}{2}" -f $i, $name, $suffix
             $text   = switch ($mode) {
-                'yolo'  { "$label (autonome)" }
                 'shell' { "$label (shell)" }
                 default { $label }
             }

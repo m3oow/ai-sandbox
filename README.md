@@ -95,8 +95,8 @@ Vérification : `podman images` doit lister `localhost/ai-sandbox-base`, `-claud
 
 Le menu n'est qu'un ensemble de clés sous `HKCU` (votre utilisateur uniquement). Pour chaque
 entrée, créez une clé dont la sous-clé `command` contient la commande à lancer. Exemple pour
-Claude (les entrées autonome et shell de Claude, puis les trois entrées de Gemini, suivent le
-même modèle, avec `-Yolo`, `-Shell` et/ou `-Client gemini`) :
+Claude (l'entrée shell de Claude, puis les deux entrées de Gemini, suivent le même modèle,
+avec `-Shell` et/ou `-Client gemini`) :
 
 ```powershell
 $ps1  = "$env:LOCALAPPDATA\ai-sandbox\ai-sandbox.ps1"
@@ -119,7 +119,6 @@ foreach ($b in 'HKCU:\Software\Classes\Directory\shell\AISandbox',
 
 - Sans Windows Terminal, retirez le préfixe `wt.exe -w new `.
 - `%V` est remplacé par Windows avec le dossier cliqué.
-- Pour l'entrée autonome, ajoutez `-Yolo` avant `-Path`.
 - Pour l'entrée shell, ajoutez `-Shell` avant `-Path` (voir « Utilisation »).
 
 #### Détail des clés de registre (pour `regedit`)
@@ -145,24 +144,16 @@ AISandbox
     │   │   MUIVerb        REG_SZ     Claude
     │   └── command
     │         (Par défaut)  REG_SZ     <commande Claude>
-    ├── 02-claude-yolo
-    │   │   MUIVerb        REG_SZ     Claude (autonome)
-    │   └── command
-    │         (Par défaut)  REG_SZ     <commande Claude autonome>
-    ├── 03-claude-shell
+    ├── 02-claude-shell
     │   │   MUIVerb        REG_SZ     Claude (shell)
     │   └── command
     │         (Par défaut)  REG_SZ     <commande Claude shell>
-    ├── 04-gemini
+    ├── 03-gemini
     │   │   MUIVerb        REG_SZ     Gemini
     │   │   CommandFlags   REG_DWORD  0x00000020   (séparateur au-dessus de cette entrée)
     │   └── command
     │         (Par défaut)  REG_SZ     <commande Gemini>
-    ├── 05-gemini-yolo
-    │   │   MUIVerb        REG_SZ     Gemini (autonome)
-    │   └── command
-    │         (Par défaut)  REG_SZ     <commande Gemini autonome>
-    └── 06-gemini-shell
+    └── 04-gemini-shell
         │   MUIVerb        REG_SZ     Gemini (shell)
         └── command
               (Par défaut)  REG_SZ     <commande Gemini shell>
@@ -175,7 +166,7 @@ Points d'attention :
 - Le préfixe numérique des sous-clés (`01-`, `02-`…) fixe l'ordre d'affichage.
 - `(Par défaut)` est la valeur sans nom de la sous-clé `command`. Dans regedit : double-clic
   sur `(Par défaut)` puis saisie de la commande.
-- Pour n'avoir que Claude, ne créez que `01-claude`, `02-claude-yolo` et `03-claude-shell`.
+- Pour n'avoir que Claude, ne créez que `01-claude` et `02-claude-shell`.
 - `Icon` : obtenez le chemin avec `(Get-Command podman).Source` ; ajoutez `,0` à la fin
   (première icône du fichier). Facultatif.
 
@@ -185,11 +176,9 @@ Commandes à saisir (remplacez `<UTILISATEUR>` par votre nom de profil Windows, 
 | Entrée | Valeur de `command` |
 |---|---|
 | `01-claude` | `wt.exe -w new powershell.exe -NoProfile -File "C:\Users\<UTILISATEUR>\AppData\Local\ai-sandbox\ai-sandbox.ps1" -Client claude -Path "%V"` |
-| `02-claude-yolo` | idem, avec ` -Yolo` avant ` -Path` |
-| `03-claude-shell` | idem `01-claude`, avec ` -Shell` avant ` -Path` |
-| `04-gemini` | idem `01-claude`, avec `-Client gemini` |
-| `05-gemini-yolo` | idem `04-gemini`, avec ` -Yolo` avant ` -Path` |
-| `06-gemini-shell` | idem `04-gemini`, avec ` -Shell` avant ` -Path` |
+| `02-claude-shell` | idem `01-claude`, avec ` -Shell` avant ` -Path` |
+| `03-gemini` | idem `01-claude`, avec `-Client gemini` |
+| `04-gemini-shell` | idem `03-gemini`, avec ` -Shell` avant ` -Path` |
 
 - `%V` doit rester tel quel : Windows le remplace par le dossier cliqué.
 - Sans Windows Terminal, supprimez le préfixe `wt.exe -w new `.
@@ -200,8 +189,7 @@ Commandes à saisir (remplacez `<UTILISATEUR>` par votre nom de profil Windows, 
 suivant dans un fichier `ai-sandbox-menu.reg` (encodage Unicode/UTF-16 LE, celui de regedit ;
 si vous l'éditez à la main, enregistrez-le ainsi, sinon `sandboxée` sera mal lu), remplacez
 `<UTILISATEUR>` et `<CHEMIN PODMAN>` (antislashs doublés), puis double-cliquez dessus. L'exemple
-couvre Claude ; pour Gemini, dupliquez les blocs sur le même modèle (`04-gemini`, `05-gemini-yolo`,
-`06-gemini-shell`). Le bloc est à répéter pour la seconde racine (`...\Directory\Background\shell\...`).
+couvre Claude ; pour Gemini, dupliquez les blocs sur le même modèle (`03-gemini`, `04-gemini-shell`). Le bloc est à répéter pour la seconde racine (`...\Directory\Background\shell\...`).
 
 ```
 Windows Registry Editor Version 5.00
@@ -217,16 +205,10 @@ Windows Registry Editor Version 5.00
 [HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\01-claude\command]
 @="wt.exe -w new powershell.exe -NoProfile -File \"C:\\Users\\<UTILISATEUR>\\AppData\\Local\\ai-sandbox\\ai-sandbox.ps1\" -Client claude -Path \"%V\""
 
-[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\02-claude-yolo]
-"MUIVerb"="Claude (autonome)"
-
-[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\02-claude-yolo\command]
-@="wt.exe -w new powershell.exe -NoProfile -File \"C:\\Users\\<UTILISATEUR>\\AppData\\Local\\ai-sandbox\\ai-sandbox.ps1\" -Client claude -Yolo -Path \"%V\""
-
-[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\03-claude-shell]
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\02-claude-shell]
 "MUIVerb"="Claude (shell)"
 
-[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\03-claude-shell\command]
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\02-claude-shell\command]
 @="wt.exe -w new powershell.exe -NoProfile -File \"C:\\Users\\<UTILISATEUR>\\AppData\\Local\\ai-sandbox\\ai-sandbox.ps1\" -Client claude -Shell -Path \"%V\""
 ```
 
@@ -241,7 +223,6 @@ Le menu apparaît sans redémarrage ; sous Windows 11, il est dans **Afficher pl
 | Entrée du menu | Effet |
 |---|---|
 | Claude / Gemini | Session normale : le client demande avant d'agir |
-| Claude (autonome) / Gemini (autonome) | `--dangerously-skip-permissions` / `--yolo` : l'IA agit sans demander, dans la limite du dossier monté |
 | Claude (shell) / Gemini (shell) | Ouvre un `bash` dans la sandbox du dossier, sans lancer l'agent |
 
 Les entrées « shell » ouvrent un terminal dans **le même conteneur** que l'agent du dossier
