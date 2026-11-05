@@ -24,7 +24,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 Le script copie les fichiers dans `%LOCALAPPDATA%\ai-sandbox`, construit les images depuis UBI 10
-(`ai-sandbox-base`, `ai-sandbox-claude`, `ai-sandbox-gemini`) et ajoute le menu contextuel.
+(`ai-sandbox-base`, `ai-sandbox-claude`, `ai-sandbox-gemini`) et ajoute le menu contextuel (le dossier `.git` n'est pas copié).
 Aucun droit administrateur n'est nécessaire.
 
 Sous Windows 11, le menu est dans **Afficher plus d'options** (ou Maj + clic droit).
@@ -51,7 +51,7 @@ podman info --format '{{.Host.Security.Rootless}}'   # doit afficher true (rootl
 ```powershell
 $Dest = "$env:LOCALAPPDATA\ai-sandbox"
 New-Item -ItemType Directory -Force -Path $Dest | Out-Null
-Copy-Item -Path .\* -Destination $Dest -Recurse -Force
+Get-ChildItem -Force | Where-Object Name -ne '.git' | Copy-Item -Destination $Dest -Recurse -Force   # sans le dossier .git
 Get-ChildItem -Path $Dest -Recurse -File | Unblock-File   # retire la marque « téléchargé depuis Internet »
 ```
 
@@ -95,8 +95,8 @@ Vérification : `podman images` doit lister `localhost/ai-sandbox-base`, `-claud
 
 Le menu n'est qu'un ensemble de clés sous `HKCU` (votre utilisateur uniquement). Pour chaque
 entrée, créez une clé dont la sous-clé `command` contient la commande à lancer. Exemple pour
-Claude (les entrées Claude autonome, Gemini et Gemini autonome suivent le même modèle, avec
-`-Yolo` et/ou `-Client gemini`) :
+Claude (les entrées autonome et shell de Claude, puis les trois entrées de Gemini, suivent le
+même modèle, avec `-Yolo`, `-Shell` et/ou `-Client gemini`) :
 
 ```powershell
 $ps1  = "$env:LOCALAPPDATA\ai-sandbox\ai-sandbox.ps1"
@@ -120,6 +120,7 @@ foreach ($b in 'HKCU:\Software\Classes\Directory\shell\AISandbox',
 - Sans Windows Terminal, retirez le préfixe `wt.exe -w new `.
 - `%V` est remplacé par Windows avec le dossier cliqué.
 - Pour l'entrée autonome, ajoutez `-Yolo` avant `-Path`.
+- Pour l'entrée shell, ajoutez `-Shell` avant `-Path` (voir « Utilisation »).
 
 #### Détail des clés de registre (pour `regedit`)
 
@@ -148,15 +149,23 @@ AISandbox
     │   │   MUIVerb        REG_SZ     Claude (autonome)
     │   └── command
     │         (Par défaut)  REG_SZ     <commande Claude autonome>
-    ├── 03-gemini
+    ├── 03-claude-shell
+    │   │   MUIVerb        REG_SZ     Claude (shell)
+    │   └── command
+    │         (Par défaut)  REG_SZ     <commande Claude shell>
+    ├── 04-gemini
     │   │   MUIVerb        REG_SZ     Gemini
     │   │   CommandFlags   REG_DWORD  0x00000020   (séparateur au-dessus de cette entrée)
     │   └── command
     │         (Par défaut)  REG_SZ     <commande Gemini>
-    └── 04-gemini-yolo
-        │   MUIVerb        REG_SZ     Gemini (autonome)
+    ├── 05-gemini-yolo
+    │   │   MUIVerb        REG_SZ     Gemini (autonome)
+    │   └── command
+    │         (Par défaut)  REG_SZ     <commande Gemini autonome>
+    └── 06-gemini-shell
+        │   MUIVerb        REG_SZ     Gemini (shell)
         └── command
-              (Par défaut)  REG_SZ     <commande Gemini autonome>
+              (Par défaut)  REG_SZ     <commande Gemini shell>
 ```
 
 Points d'attention :
@@ -166,7 +175,7 @@ Points d'attention :
 - Le préfixe numérique des sous-clés (`01-`, `02-`…) fixe l'ordre d'affichage.
 - `(Par défaut)` est la valeur sans nom de la sous-clé `command`. Dans regedit : double-clic
   sur `(Par défaut)` puis saisie de la commande.
-- Pour n'avoir que Claude, ne créez que `01-claude` et `02-claude-yolo`.
+- Pour n'avoir que Claude, ne créez que `01-claude`, `02-claude-yolo` et `03-claude-shell`.
 - `Icon` : obtenez le chemin avec `(Get-Command podman).Source` ; ajoutez `,0` à la fin
   (première icône du fichier). Facultatif.
 
@@ -177,8 +186,10 @@ Commandes à saisir (remplacez `<UTILISATEUR>` par votre nom de profil Windows, 
 |---|---|
 | `01-claude` | `wt.exe -w new powershell.exe -NoProfile -File "C:\Users\<UTILISATEUR>\AppData\Local\ai-sandbox\ai-sandbox.ps1" -Client claude -Path "%V"` |
 | `02-claude-yolo` | idem, avec ` -Yolo` avant ` -Path` |
-| `03-gemini` | idem `01-claude`, avec `-Client gemini` |
-| `04-gemini-yolo` | idem `03-gemini`, avec ` -Yolo` avant ` -Path` |
+| `03-claude-shell` | idem `01-claude`, avec ` -Shell` avant ` -Path` |
+| `04-gemini` | idem `01-claude`, avec `-Client gemini` |
+| `05-gemini-yolo` | idem `04-gemini`, avec ` -Yolo` avant ` -Path` |
+| `06-gemini-shell` | idem `04-gemini`, avec ` -Shell` avant ` -Path` |
 
 - `%V` doit rester tel quel : Windows le remplace par le dossier cliqué.
 - Sans Windows Terminal, supprimez le préfixe `wt.exe -w new `.
@@ -189,8 +200,8 @@ Commandes à saisir (remplacez `<UTILISATEUR>` par votre nom de profil Windows, 
 suivant dans un fichier `ai-sandbox-menu.reg` (encodage Unicode/UTF-16 LE, celui de regedit ;
 si vous l'éditez à la main, enregistrez-le ainsi, sinon `sandboxée` sera mal lu), remplacez
 `<UTILISATEUR>` et `<CHEMIN PODMAN>` (antislashs doublés), puis double-cliquez dessus. L'exemple
-couvre Claude ; pour Gemini, dupliquez les blocs `03-gemini` et `04-gemini-yolo` sur le même
-modèle. Le bloc est à répéter pour la seconde racine (`...\Directory\Background\shell\...`).
+couvre Claude ; pour Gemini, dupliquez les blocs sur le même modèle (`04-gemini`, `05-gemini-yolo`,
+`06-gemini-shell`). Le bloc est à répéter pour la seconde racine (`...\Directory\Background\shell\...`).
 
 ```
 Windows Registry Editor Version 5.00
@@ -211,6 +222,12 @@ Windows Registry Editor Version 5.00
 
 [HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\02-claude-yolo\command]
 @="wt.exe -w new powershell.exe -NoProfile -File \"C:\\Users\\<UTILISATEUR>\\AppData\\Local\\ai-sandbox\\ai-sandbox.ps1\" -Client claude -Yolo -Path \"%V\""
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\03-claude-shell]
+"MUIVerb"="Claude (shell)"
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\03-claude-shell\command]
+@="wt.exe -w new powershell.exe -NoProfile -File \"C:\\Users\\<UTILISATEUR>\\AppData\\Local\\ai-sandbox\\ai-sandbox.ps1\" -Client claude -Shell -Path \"%V\""
 ```
 
 Dans un fichier `.reg`, `\` s'écrit `\\` et `"` s'écrit `\"` ; une valeur `REG_DWORD`
@@ -225,6 +242,12 @@ Le menu apparaît sans redémarrage ; sous Windows 11, il est dans **Afficher pl
 |---|---|
 | Claude / Gemini | Session normale : le client demande avant d'agir |
 | Claude (autonome) / Gemini (autonome) | `--dangerously-skip-permissions` / `--yolo` : l'IA agit sans demander, dans la limite du dossier monté |
+| Claude (shell) / Gemini (shell) | Ouvre un `bash` dans la sandbox du dossier, sans lancer l'agent |
+
+Les entrées « shell » ouvrent un terminal dans **le même conteneur** que l'agent du dossier
+(un conteneur par couple client + dossier) : vous pouvez manipuler les fichiers en shell pendant
+qu'un agent tourne dans une autre fenêtre. Ils partagent les outils installés et la configuration
+du client, mais pas le terminal.
 
 **Authentification** : le plus simple est un `settings.json` contenant votre clé ou votre
 gateway (voir « Réglages du client IA »). Vous pouvez aussi définir `ANTHROPIC_API_KEY` ou
