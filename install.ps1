@@ -54,10 +54,12 @@ if ((Resolve-Path $Src).ProviderPath.TrimEnd('\') -ine $Dest.TrimEnd('\')) {
     # Une configuration déjà installée (ex. image interne) est conservée
     $destConfig = Join-Path $Dest 'config.psd1'
     $savedConfig = if (Test-Path -LiteralPath $destConfig) { Get-Content -LiteralPath $destConfig -Raw -Encoding UTF8 }
-    # Le dossier .git (historique du dépôt) n'a rien à faire dans le dossier d'installation
-    Get-ChildItem -LiteralPath $Src -Force |
-        Where-Object { $_.Name -ne '.git' } |
-        Copy-Item -Destination $Dest -Recurse -Force
+    # Seuls les fichiers nécessaires à l'exécution sont installés : ni .git, ni .gitignore,
+    # ni README, ni install.ps1, ni fichiers cachés ou propres à l'éditeur ou à l'IA
+    # (.geminiignore, .claude/...) qui traîneraient dans le dossier source.
+    foreach ($item in @('ai-sandbox.ps1', 'clients.psd1', 'config.psd1', 'uninstall.ps1', 'lib', 'images')) {
+        Copy-Item -LiteralPath (Join-Path $Src $item) -Destination $Dest -Recurse -Force
+    }
     if ($savedConfig) {
         [IO.File]::WriteAllText($destConfig, $savedConfig, (New-Object Text.UTF8Encoding $true))
         Write-Host "Configuration existante conservée : $destConfig" -ForegroundColor DarkGray

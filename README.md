@@ -23,8 +23,11 @@ Dans le dossier décompressé :
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-Le script copie les fichiers dans `%LOCALAPPDATA%\ai-sandbox`, construit les images depuis UBI 10
-(`ai-sandbox-base`, `ai-sandbox-claude`, `ai-sandbox-gemini`) et ajoute le menu contextuel (le dossier `.git` n'est pas copié).
+Le script copie dans `%LOCALAPPDATA%\ai-sandbox` les seuls fichiers nécessaires à l'exécution
+(`ai-sandbox.ps1`, `uninstall.ps1`, `config.psd1`, `clients.psd1`, `lib\`, `images\`), construit
+les images depuis UBI 10 (`ai-sandbox-base`, `ai-sandbox-claude`, `ai-sandbox-gemini`) et ajoute
+le menu contextuel. `install.ps1` lui-même, le README et les fichiers cachés (`.git`,
+`.gitignore`…) ne sont pas installés : relancez l'installation depuis le dossier source.
 Aucun droit administrateur n'est nécessaire.
 
 Sous Windows 11, le menu est dans **Afficher plus d'options** (ou Maj + clic droit).
@@ -51,7 +54,9 @@ podman info --format '{{.Host.Security.Rootless}}'   # doit afficher true (rootl
 ```powershell
 $Dest = "$env:LOCALAPPDATA\ai-sandbox"
 New-Item -ItemType Directory -Force -Path $Dest | Out-Null
-Get-ChildItem -Force | Where-Object Name -ne '.git' | Copy-Item -Destination $Dest -Recurse -Force   # sans le dossier .git
+foreach ($item in 'ai-sandbox.ps1', 'clients.psd1', 'config.psd1', 'uninstall.ps1', 'lib', 'images') {
+    Copy-Item -LiteralPath $item -Destination $Dest -Recurse -Force
+}
 Get-ChildItem -Path $Dest -Recurse -File | Unblock-File   # retire la marque « téléchargé depuis Internet »
 ```
 
