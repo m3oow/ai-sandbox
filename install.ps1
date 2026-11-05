@@ -106,6 +106,12 @@ if (-not $NoBuild) {
 $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
 
 function New-MenuCommand([string]$ClientName, [string]$Mode) {
+    if ($Mode -eq 'rebuild') {
+        # -NoExit : la fenêtre reste ouverte pour lire le résultat de la construction
+        $cmd = "powershell.exe -NoProfile -NoExit -ExecutionPolicy Bypass -File `"$ps1`" -Rebuild"
+        if ($wt) { return "wt.exe -w new $cmd" }
+        return $cmd
+    }
     $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -Client $ClientName"
     if ($Mode -eq 'shell') { $cmd += ' -Shell' }
     $cmd += ' -Path "%V"'
@@ -148,6 +154,14 @@ foreach ($b in $bases) {
             Set-ItemProperty -LiteralPath "$key\command" -Name '(default)' -Value (New-MenuCommand $name $mode)
         }
     }
+
+    # Dernière entrée : reconstruction des images (met à jour les clients IA)
+    $i++
+    $key = "$b\shell\{0:D2}-rebuild" -f $i
+    New-Item -Path "$key\command" -Force | Out-Null
+    New-ItemProperty -LiteralPath $key -Name 'MUIVerb'       -Value 'Reconstruire les images' -PropertyType String -Force | Out-Null
+    New-ItemProperty -LiteralPath $key -Name 'CommandFlags' -Value 0x20 -PropertyType DWord -Force | Out-Null
+    Set-ItemProperty -LiteralPath "$key\command" -Name '(default)' -Value (New-MenuCommand '' 'rebuild')
 }
 
 Write-Host ''

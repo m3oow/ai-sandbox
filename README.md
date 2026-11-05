@@ -158,10 +158,15 @@ AISandbox
     │   │   CommandFlags   REG_DWORD  0x00000020   (séparateur au-dessus de cette entrée)
     │   └── command
     │         (Par défaut)  REG_SZ     <commande Gemini>
-    └── 04-gemini-shell
-        │   MUIVerb        REG_SZ     Gemini (shell)
+    ├── 04-gemini-shell
+    │   │   MUIVerb        REG_SZ     Gemini (shell)
+    │   └── command
+    │         (Par défaut)  REG_SZ     <commande Gemini shell>
+    └── 05-rebuild
+        │   MUIVerb        REG_SZ     Reconstruire les images
+        │   CommandFlags   REG_DWORD  0x00000020   (séparateur au-dessus de cette entrée)
         └── command
-              (Par défaut)  REG_SZ     <commande Gemini shell>
+              (Par défaut)  REG_SZ     <commande de reconstruction>
 ```
 
 Points d'attention :
@@ -184,6 +189,7 @@ Commandes à saisir (remplacez `<UTILISATEUR>` par votre nom de profil Windows, 
 | `02-claude-shell` | idem `01-claude`, avec ` -Shell` avant ` -Path` |
 | `03-gemini` | idem `01-claude`, avec `-Client gemini` |
 | `04-gemini-shell` | idem `03-gemini`, avec ` -Shell` avant ` -Path` |
+| `05-rebuild` | `wt.exe -w new powershell.exe -NoProfile -NoExit -File "C:\Users\<UTILISATEUR>\AppData\Local\ai-sandbox\ai-sandbox.ps1" -Rebuild` (pas de `-Client` ni `-Path`) |
 
 - `%V` doit rester tel quel : Windows le remplace par le dossier cliqué.
 - Sans Windows Terminal, supprimez le préfixe `wt.exe -w new `.
@@ -229,6 +235,7 @@ Le menu apparaît sans redémarrage ; sous Windows 11, il est dans **Afficher pl
 |---|---|
 | Claude / Gemini | Session normale : le client demande avant d'agir |
 | Claude (shell) / Gemini (shell) | Ouvre un `bash` dans la sandbox du dossier, sans lancer l'agent |
+| Reconstruire les images | `ai-sandbox.ps1 -Rebuild` : reconstruit les images et met à jour Claude Code et Gemini CLI. La fenêtre reste ouverte pour lire le résultat |
 
 Les entrées « shell » ouvrent un terminal dans **le même conteneur** que l'agent du dossier
 (un conteneur par couple client + dossier) : vous pouvez manipuler les fichiers en shell pendant
@@ -361,7 +368,7 @@ de `Windows`, `Program Files`, `ProgramData`, `AppData`, et des chemins réseau.
 | Lenteur sur de gros projets | Les fichiers de `C:\` passent par le pont WSL : c'est plus lent qu'un disque natif |
 | Échec du build de l'image de base | Vérifier `BaseImage`, `podman login`, et que les dépôts dnf de l'image fournissent les paquets requis |
 | Échec `npm install` des clients IA | Registre npm injoignable : renseigner `NpmRegistry` dans `config.psd1`, puis `-Rebuild` |
-| Mettre à jour Claude Code / Gemini CLI | `-Rebuild`, puis `-Reset` sur les sandboxes concernées |
+| Mettre à jour Claude Code / Gemini CLI | Entrée de menu « Reconstruire les images » (ou `-Rebuild`), puis `-Reset` sur les sandboxes concernées |
 
 ## Désinstallation
 
