@@ -54,10 +54,12 @@ if ((Resolve-Path $Src).ProviderPath.TrimEnd('\') -ine $Dest.TrimEnd('\')) {
     # Une configuration déjà installée (ex. image interne) est conservée
     $destConfig = Join-Path $Dest 'config.psd1'
     $savedConfig = if (Test-Path -LiteralPath $destConfig) { Get-Content -LiteralPath $destConfig -Raw -Encoding UTF8 }
-    # Le dossier .git (historique du dépôt) n'a rien à faire dans le dossier d'installation
-    Get-ChildItem -LiteralPath $Src -Force |
-        Where-Object { $_.Name -ne '.git' } |
-        Copy-Item -Destination $Dest -Recurse -Force
+    # Seuls les fichiers nécessaires à l'exécution sont installés : ni .git, ni .gitignore,
+    # ni README, ni install.ps1, ni fichiers cachés ou propres à l'éditeur ou à l'IA
+    # (.geminiignore, .claude/...) qui traîneraient dans le dossier source.
+    foreach ($item in @('ai-sandbox.ps1', 'clients.psd1', 'config.psd1', 'uninstall.ps1', 'lib', 'images')) {
+        Copy-Item -LiteralPath (Join-Path $Src $item) -Destination $Dest -Recurse -Force
+    }
     if ($savedConfig) {
         [IO.File]::WriteAllText($destConfig, $savedConfig, (New-Object Text.UTF8Encoding $true))
         Write-Host "Configuration existante conservée : $destConfig" -ForegroundColor DarkGray
@@ -104,6 +106,12 @@ if (-not $NoBuild) {
 $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
 
 function New-MenuCommand([string]$ClientName, [string]$Mode) {
+    if ($Mode -eq 'rebuild') {
+        # -NoExit : la fenêtre reste ouverte pour lire le résultat de la construction
+        $cmd = "powershell.exe -NoProfile -NoExit -ExecutionPolicy Bypass -File `"$ps1`" -Rebuild"
+        if ($wt) { return "wt.exe -w new $cmd" }
+        return $cmd
+    }
     $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -Client $ClientName"
     if ($Mode -eq 'shell') { $cmd += ' -Shell' }
     $cmd += ' -Path "%V"'
@@ -146,6 +154,14 @@ foreach ($b in $bases) {
             Set-ItemProperty -LiteralPath "$key\command" -Name '(default)' -Value (New-MenuCommand $name $mode)
         }
     }
+
+    # Dernière entrée : reconstruction des images (met à jour les clients IA)
+    $i++
+    $key = "$b\shell\{0:D2}-rebuild" -f $i
+    New-Item -Path "$key\command" -Force | Out-Null
+    New-ItemProperty -LiteralPath $key -Name 'MUIVerb'       -Value 'Reconstruire les images' -PropertyType String -Force | Out-Null
+    New-ItemProperty -LiteralPath $key -Name 'CommandFlags' -Value 0x20 -PropertyType DWord -Force | Out-Null
+    Set-ItemProperty -LiteralPath "$key\command" -Name '(default)' -Value (New-MenuCommand '' 'rebuild')
 }
 
 Write-Host ''
