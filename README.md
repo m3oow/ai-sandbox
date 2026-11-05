@@ -29,6 +29,196 @@ Aucun droit administrateur n'est nécessaire.
 
 Sous Windows 11, le menu est dans **Afficher plus d'options** (ou Maj + clic droit).
 
+### Installation manuelle (sans `install.ps1`)
+
+Si vous préférez ne pas lancer `install.ps1` (par exemple en contexte professionnel, où
+`-ExecutionPolicy Bypass` ou l'écriture dans le registre par un script peuvent déclencher une
+alerte de sécurité), chaque étape peut être faite à la main, une commande à la fois, depuis
+PowerShell. Rien n'exige de droits administrateur, tout reste dans votre profil.
+
+Les commandes ci-dessous supposent que vous êtes dans le dossier décompressé.
+
+**1. Vérifier Podman**
+
+```powershell
+podman --version
+podman machine start          # si la machine n'est pas déjà démarrée
+podman info --format '{{.Host.Security.Rootless}}'   # doit afficher true (rootless)
+```
+
+**2. Copier les fichiers dans `%LOCALAPPDATA%\ai-sandbox`**
+
+```powershell
+$Dest = "$env:LOCALAPPDATA\ai-sandbox"
+New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+Copy-Item -Path .\* -Destination $Dest -Recurse -Force
+Get-ChildItem -Path $Dest -Recurse -File | Unblock-File   # retire la marque « téléchargé depuis Internet »
+```
+
+`Unblock-File` permet d'exécuter `ai-sandbox.ps1` avec la politique d'exécution `RemoteSigned`
+habituelle, sans avoir à la contourner. En cas de réinstallation, ne recopiez pas par-dessus
+un `config.psd1` que vous avez modifié.
+
+**3. (Facultatif) Adapter la configuration**
+
+Éditez `%LOCALAPPDATA%\ai-sandbox\config.psd1` pour `BaseImage` (registre interne),
+`NpmRegistry` et `Settings` (voir plus bas).
+
+**4. Construire les images**
+
+Si votre registre exige une authentification : `podman login <registre>` au préalable.
+Remplacez `BASE` et `NPM` par les valeurs de `config.psd1` (`NPM` peut rester vide).
+
+```powershell
+cd "$env:LOCALAPPDATA\ai-sandbox\images"
+$BASE = 'registry.access.redhat.com/ubi10/ubi:latest'
+$NPM  = ''
+
+podman build --build-arg "BASE_IMAGE=$BASE" --build-arg "NPM_REGISTRY=$NPM" `
+    --label "ai-sandbox.base-image=$BASE" -t ai-sandbox-base:latest .\base
+
+podman build --no-cache --build-arg "NPM_REGISTRY=$NPM" -t ai-sandbox-claude:latest .\claude
+podman build --no-cache --build-arg "NPM_REGISTRY=$NPM" -t ai-sandbox-gemini:latest .\gemini   # facultatif
+```
+
+Vérification : `podman images` doit lister `localhost/ai-sandbox-base`, `-claude` et `-gemini`.
+
+**5. Utiliser sans menu contextuel**
+
+À ce stade, la sandbox est déjà utilisable en ligne de commande (voir « En ligne de commande ») :
+
+```powershell
+& "$env:LOCALAPPDATA\ai-sandbox\ai-sandbox.ps1" -Client claude -Path C:\Projets\demo
+```
+
+**6. (Facultatif) Ajouter le menu contextuel à la main**
+
+Le menu n'est qu'un ensemble de clés sous `HKCU` (votre utilisateur uniquement). Pour chaque
+entrée, créez une clé dont la sous-clé `command` contient la commande à lancer. Exemple pour
+Claude (les entrées Claude autonome, Gemini et Gemini autonome suivent le même modèle, avec
+`-Yolo` et/ou `-Client gemini`) :
+
+```powershell
+$ps1  = "$env:LOCALAPPDATA\ai-sandbox\ai-sandbox.ps1"
+$icon = "$((Get-Command podman).Source),0"
+
+foreach ($b in 'HKCU:\Software\Classes\Directory\shell\AISandbox',
+               'HKCU:\Software\Classes\Directory\Background\shell\AISandbox') {
+    New-Item -Path $b -Force | Out-Null
+    New-ItemProperty -LiteralPath $b -Name MUIVerb     -Value 'Lancer IA sandboxée' -Force | Out-Null
+    New-ItemProperty -LiteralPath $b -Name SubCommands -Value ''                    -Force | Out-Null
+    New-ItemProperty -LiteralPath $b -Name Icon        -Value $icon                 -Force | Out-Null
+
+    $k = "$b\shell\01-claude"
+    New-Item -Path "$k\command" -Force | Out-Null
+    New-ItemProperty -LiteralPath $k -Name MUIVerb -Value 'Claude' -Force | Out-Null
+    Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
+        -Value "wt.exe -w new powershell.exe -NoProfile -File `"$ps1`" -Client claude -Path `"%V`""
+}
+```
+
+- Sans Windows Terminal, retirez le préfixe `wt.exe -w new `.
+- `%V` est remplacé par Windows avec le dossier cliqué.
+- Pour l'entrée autonome, ajoutez `-Yolo` avant `-Path`.
+
+#### Détail des clés de registre (pour `regedit`)
+
+Tout est sous `HKEY_CURRENT_USER` (HKCU) : pas de droits administrateur. Les deux arborescences
+suivantes sont **identiques** et doivent toutes deux être créées : la première pour le clic
+droit *sur* un dossier, la seconde pour le clic droit *dans* un dossier ouvert (fond de fenêtre).
+
+```
+HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox
+HKEY_CURRENT_USER\Software\Classes\Directory\Background\shell\AISandbox
+```
+
+Arborescence à reproduire sous chacune des deux clés `AISandbox` :
+
+```
+AISandbox
+│   MUIVerb      REG_SZ     Lancer IA sandboxée
+│   SubCommands  REG_SZ     (chaîne vide)
+│   Icon         REG_SZ     <chemin de podman.exe>,0
+└── shell
+    ├── 01-claude
+    │   │   MUIVerb        REG_SZ     Claude
+    │   └── command
+    │         (Par défaut)  REG_SZ     <commande Claude>
+    ├── 02-claude-yolo
+    │   │   MUIVerb        REG_SZ     Claude (autonome)
+    │   └── command
+    │         (Par défaut)  REG_SZ     <commande Claude autonome>
+    ├── 03-gemini
+    │   │   MUIVerb        REG_SZ     Gemini
+    │   │   CommandFlags   REG_DWORD  0x00000020   (séparateur au-dessus de cette entrée)
+    │   └── command
+    │         (Par défaut)  REG_SZ     <commande Gemini>
+    └── 04-gemini-yolo
+        │   MUIVerb        REG_SZ     Gemini (autonome)
+        └── command
+              (Par défaut)  REG_SZ     <commande Gemini autonome>
+```
+
+Points d'attention :
+
+- `SubCommands` doit exister avec une valeur **vide** : c'est ce qui transforme l'entrée en
+  sous-menu déroulant. Sans elle, Windows n'affiche pas les entrées de `shell`.
+- Le préfixe numérique des sous-clés (`01-`, `02-`…) fixe l'ordre d'affichage.
+- `(Par défaut)` est la valeur sans nom de la sous-clé `command`. Dans regedit : double-clic
+  sur `(Par défaut)` puis saisie de la commande.
+- Pour n'avoir que Claude, ne créez que `01-claude` et `02-claude-yolo`.
+- `Icon` : obtenez le chemin avec `(Get-Command podman).Source` ; ajoutez `,0` à la fin
+  (première icône du fichier). Facultatif.
+
+Commandes à saisir (remplacez `<UTILISATEUR>` par votre nom de profil Windows, le chemin doit
+être absolu : regedit n'étend pas `%LOCALAPPDATA%` dans une valeur `REG_SZ`) :
+
+| Entrée | Valeur de `command` |
+|---|---|
+| `01-claude` | `wt.exe -w new powershell.exe -NoProfile -File "C:\Users\<UTILISATEUR>\AppData\Local\ai-sandbox\ai-sandbox.ps1" -Client claude -Path "%V"` |
+| `02-claude-yolo` | idem, avec ` -Yolo` avant ` -Path` |
+| `03-gemini` | idem `01-claude`, avec `-Client gemini` |
+| `04-gemini-yolo` | idem `03-gemini`, avec ` -Yolo` avant ` -Path` |
+
+- `%V` doit rester tel quel : Windows le remplace par le dossier cliqué.
+- Sans Windows Terminal, supprimez le préfixe `wt.exe -w new `.
+- `install.ps1` ajoute en plus `-ExecutionPolicy Bypass` après `-NoProfile`. C'est inutile si
+  vous avez fait `Unblock-File` (étape 2) avec une politique `RemoteSigned`.
+
+**Import par fichier `.reg`** (alternative à la saisie dans regedit) : enregistrez le contenu
+suivant dans un fichier `ai-sandbox-menu.reg` (encodage Unicode/UTF-16 LE, celui de regedit ;
+si vous l'éditez à la main, enregistrez-le ainsi, sinon `sandboxée` sera mal lu), remplacez
+`<UTILISATEUR>` et `<CHEMIN PODMAN>` (antislashs doublés), puis double-cliquez dessus. L'exemple
+couvre Claude ; pour Gemini, dupliquez les blocs `03-gemini` et `04-gemini-yolo` sur le même
+modèle. Le bloc est à répéter pour la seconde racine (`...\Directory\Background\shell\...`).
+
+```
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox]
+"MUIVerb"="Lancer IA sandboxée"
+"SubCommands"=""
+"Icon"="<CHEMIN PODMAN>,0"
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\01-claude]
+"MUIVerb"="Claude"
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\01-claude\command]
+@="wt.exe -w new powershell.exe -NoProfile -File \"C:\\Users\\<UTILISATEUR>\\AppData\\Local\\ai-sandbox\\ai-sandbox.ps1\" -Client claude -Path \"%V\""
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\02-claude-yolo]
+"MUIVerb"="Claude (autonome)"
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\02-claude-yolo\command]
+@="wt.exe -w new powershell.exe -NoProfile -File \"C:\\Users\\<UTILISATEUR>\\AppData\\Local\\ai-sandbox\\ai-sandbox.ps1\" -Client claude -Yolo -Path \"%V\""
+```
+
+Dans un fichier `.reg`, `\` s'écrit `\\` et `"` s'écrit `\"` ; une valeur `REG_DWORD`
+s'écrit `"CommandFlags"=dword:00000020`.
+
+Pour retirer le menu : supprimez les deux clés `AISandbox` (voir « Désinstallation » ci-dessous).
+Le menu apparaît sans redémarrage ; sous Windows 11, il est dans **Afficher plus d'options**.
+
 ## Utilisation
 
 | Entrée du menu | Effet |
@@ -169,4 +359,17 @@ de `Windows`, `Program Files`, `ProgramData`, `AppData`, et des chemins réseau.
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\ai-sandbox\uninstall.ps1"          # menu seulement
 powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\ai-sandbox\uninstall.ps1" -Purge   # tout
+```
+
+### Désinstallation manuelle
+
+```powershell
+# menu contextuel
+Remove-Item -Recurse -Force 'HKCU:\Software\Classes\Directory\shell\AISandbox',
+                            'HKCU:\Software\Classes\Directory\Background\shell\AISandbox'
+
+# sandboxes, images, fichiers (équivalent de -Purge)
+podman ps -aq --filter label=ai-sandbox.path | ForEach-Object { podman rm -f $_ }
+podman rmi -f ai-sandbox-claude ai-sandbox-gemini ai-sandbox-base
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\ai-sandbox"
 ```
