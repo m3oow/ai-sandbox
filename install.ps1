@@ -58,12 +58,6 @@ if ((Resolve-Path $Src).ProviderPath.TrimEnd('\') -ine $Dest.TrimEnd('\')) {
     Get-ChildItem -LiteralPath $Src -Force |
         Where-Object { $_.Name -ne '.git' } |
         Copy-Item -Destination $Dest -Recurse -Force
-    # Installation antérieure qui avait recopié .git : nettoyage
-    $staleGit = Join-Path $Dest '.git'
-    if (Test-Path -LiteralPath $staleGit) {
-        Remove-Item -LiteralPath $staleGit -Recurse -Force
-        Write-Host "Ancien dossier .git retiré de $Dest" -ForegroundColor DarkGray
-    }
     if ($savedConfig) {
         [IO.File]::WriteAllText($destConfig, $savedConfig, (New-Object Text.UTF8Encoding $true))
         Write-Host "Configuration existante conservée : $destConfig" -ForegroundColor DarkGray
