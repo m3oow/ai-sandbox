@@ -1,5 +1,5 @@
 # Copie un fichier de reglages de l'hote dans la sandbox (remplace l'existant).
-# Execute dans le conteneur par ai-sandbox.ps1 : podman exec -i ... bash -s
+# Execute dans le conteneur par ai-sandbox.ps1 : podman exec ... bash -c (script en base64)
 #   AI_SANDBOX_SETTINGS_B64     contenu du fichier hote, en base64
 #   AI_SANDBOX_SETTINGS_TARGET  chemin du fichier de reglages dans le conteneur
 #   AI_SANDBOX_ONBOARDING       (facultatif) fichier d'etat cree pour sauter l'ecran d'accueil

@@ -239,16 +239,20 @@ if ($settingsSrc -and $cfg.SettingsTarget) {
     $settingsSrc = [Environment]::ExpandEnvironmentVariables($settingsSrc)
     if (Test-Path -LiteralPath $settingsSrc -PathType Leaf) {
         $settingsSrc = (Resolve-Path -LiteralPath $settingsSrc).ProviderPath
-        $syncArgs = @('exec', '-i',
+        # Le script de synchronisation est transmis dans une variable d'environnement (base64)
+        # et non sur l'entrée standard : un tube vers podman.exe peut ne pas arriver au conteneur
+        # sous Windows, et bash lit alors le clavier (le script semble figé).
+        # Fins de ligne Unix forcées, rien à installer dans l'image.
+        $script  = (Get-Content -LiteralPath (Join-Path $Root 'lib\sync-settings.sh') -Raw) -replace "`r", ''
+        $scriptB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script))
+        $syncArgs = @('exec',
+            '-e', "AI_SANDBOX_SYNC_B64=$scriptB64",
             '-e', "AI_SANDBOX_SETTINGS_B64=$([Convert]::ToBase64String([IO.File]::ReadAllBytes($settingsSrc)))",
             '-e', "AI_SANDBOX_SETTINGS_TARGET=$($cfg.SettingsTarget)")
         if ($cfg.OnboardingFile) { $syncArgs += @('-e', "AI_SANDBOX_ONBOARDING=$($cfg.OnboardingFile)") }
-        $syncArgs += @($Name, 'bash', '-s')
+        $syncArgs += @($Name, 'bash', '-c', 'echo $AI_SANDBOX_SYNC_B64 | base64 -d | bash')
 
-        # Script envoyé sur l'entrée standard (ASCII, fins de ligne Unix forcées) :
-        # rien à installer dans l'image.
-        $script = (Get-Content -LiteralPath (Join-Path $Root 'lib\sync-settings.sh') -Raw) -replace "`r", ''
-        $script | & podman @syncArgs
+        & podman @syncArgs
         if ($LASTEXITCODE -eq 0) {
             $settingsInfo = $settingsSrc
         } else {
