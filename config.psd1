@@ -16,6 +16,14 @@
     #   NpmRegistry = 'https://nexus.mon-entreprise.fr/repository/npm-proxy/'
     NpmRegistry = ''
 
+    # Index pip (miroir PyPI) utilisé pour installer les bibliothèques Python de l'image
+    # (Office, PDF), puis par l'IA dans la sandbox (pip install).
+    # Vide = PyPI public https://pypi.org/simple
+    # Exemples :
+    #   PipIndexUrl = 'https://artifactory.mon-entreprise.fr/artifactory/api/pypi/pypi-remote/simple'
+    #   PipIndexUrl = 'https://nexus.mon-entreprise.fr/repository/pypi-proxy/simple'
+    PipIndexUrl = ''
+
     # Fichiers de réglages Windows copiés dans la sandbox au lancement de chaque session
     # (URL de gateway, clé d'API, modèles...). Ils ne sont JAMAIS inscrits dans les images.
     # Le fichier remplace celui de la sandbox à chaque lancement (une clé changée

@@ -72,14 +72,15 @@ un `config.psd1` que vous avez modifié.
 **4. Construire les images**
 
 Si votre registre exige une authentification : `podman login <registre>` au préalable.
-Remplacez `BASE` et `NPM` par les valeurs de `config.psd1` (`NPM` peut rester vide).
+Remplacez `BASE`, `NPM` et `PIP` par les valeurs de `config.psd1` (`NPM` et `PIP` peuvent rester vides).
 
 ```powershell
 cd "$env:LOCALAPPDATA\ai-sandbox\images"
 $BASE = 'registry.access.redhat.com/ubi10/ubi:latest'
 $NPM  = ''
+$PIP  = ''   # index pip, vide = PyPI public
 
-podman build --build-arg "BASE_IMAGE=$BASE" --build-arg "NPM_REGISTRY=$NPM" `
+podman build --build-arg "BASE_IMAGE=$BASE" --build-arg "NPM_REGISTRY=$NPM" --build-arg "PIP_INDEX_URL=$PIP" `
     --label "ai-sandbox.base-image=$BASE" -t ai-sandbox-base:latest .\base
 
 podman build --no-cache --build-arg "NPM_REGISTRY=$NPM" -t ai-sandbox-claude:latest .\claude
@@ -274,7 +275,11 @@ $s = "$env:LOCALAPPDATA\ai-sandbox\ai-sandbox.ps1"
   de la machine Podman (`--userns=keep-id`) : les fichiers créés vous appartiennent.
 - **Image de base** : Red Hat UBI 10 (`registry.access.redhat.com/ubi10/ubi:latest` par défaut)
   avec Node.js, Python 3, git, gcc/make, sudo. jq, ripgrep, tree, unzip, etc. sont ajoutés
-  s'ils existent dans les dépôts dnf de l'image, ignorés sinon.
+  s'ils existent dans les dépôts dnf de l'image, ignorés sinon. Pour lire et générer des
+  documents : `poppler-utils` (`pdftotext`, `pdftoppm`), des polices DejaVu/Liberation, sqlite,
+  ssh, rsync (best-effort), et les bibliothèques Python `openpyxl`, `xlsxwriter`, `pandas`,
+  `python-docx`, `python-pptx`, `pypdf`, `pdfplumber`, `pymupdf`, `reportlab`, `pillow`,
+  `markitdown` (obligatoires). Ni LibreOffice, ni OCR, ni navigateur : voir l'issue #5.
 
 ## Réglages du client IA (gateway, clé d'API, modèles)
 
@@ -331,6 +336,10 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -BaseImage registry.mon-e
   Gemini CLI, puis à l'IA pour ses propres `npm install`. npm utilise le magasin de
   certificats de l'image : une autorité de certification interne présente dans votre
   image UBI est donc reconnue automatiquement.
+- **Index pip** : si `pypi.org` n'est pas joignable, renseignez `PipIndexUrl` (miroir
+  Artifactory, Nexus…), ou passez `install.ps1 -PipIndexUrl <url>`. Il est enregistré dans le
+  `pip.conf` de la sandbox : il sert à installer les bibliothèques Office/PDF, puis à l'IA
+  pour ses propres `pip install`.
 - L'image doit être une UBI 10 ou compatible (dnf, utilisateur root), avec des dépôts dnf
   qui fournissent au minimum `nodejs` (≥ 20), `npm`, `python3`, `git-core`, `sudo`, `gcc`, `make`.
   Une image interne dont les `.repo` pointent vers vos miroirs convient telle quelle.
@@ -368,6 +377,7 @@ de `Windows`, `Program Files`, `ProgramData`, `AppData`, et des chemins réseau.
 | Lenteur sur de gros projets | Les fichiers de `C:\` passent par le pont WSL : c'est plus lent qu'un disque natif |
 | Échec du build de l'image de base | Vérifier `BaseImage`, `podman login`, et que les dépôts dnf de l'image fournissent les paquets requis |
 | Échec `npm install` des clients IA | Registre npm injoignable : renseigner `NpmRegistry` dans `config.psd1`, puis `-Rebuild` |
+| Échec `pip install` pendant le build de l'image de base | Index pip injoignable ou paquet absent du miroir : renseigner `PipIndexUrl` dans `config.psd1`, puis `-Rebuild` |
 | Mettre à jour Claude Code / Gemini CLI | Entrée de menu « Reconstruire les images » (ou `-Rebuild`), puis `-Reset` sur les sandboxes concernées |
 
 ## Désinstallation

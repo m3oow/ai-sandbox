@@ -42,6 +42,7 @@ $configFile = Join-Path $Root 'config.psd1'
 if (Test-Path -LiteralPath $configFile) { $Config = Import-PowerShellDataFile $configFile }
 $BaseImage = if ($Config.BaseImage) { "$($Config.BaseImage)".Trim() } else { $DefaultBaseImage }
 $NpmRegistry = if ($Config.NpmRegistry) { "$($Config.NpmRegistry)".Trim() } else { '' }
+$PipIndexUrl = if ($Config.PipIndexUrl) { "$($Config.PipIndexUrl)".Trim() } else { '' }
 
 # ---------------------------------------------------------------- utilitaires
 
@@ -72,15 +73,18 @@ function Build-Images([string[]]$Names) {
 
     Write-Host "`n== Image de base ($BaseImage) ==" -ForegroundColor Cyan
     Write-Host "   Registre npm : $(if ($NpmRegistry) { $NpmRegistry } else { 'public (registry.npmjs.org)' })" -ForegroundColor DarkGray
+    Write-Host "   Index pip    : $(if ($PipIndexUrl) { $PipIndexUrl } else { 'public (pypi.org)' })" -ForegroundColor DarkGray
     podman build --pull=newer `
         --build-arg "BASE_IMAGE=$BaseImage" `
         --build-arg "NPM_REGISTRY=$NpmRegistry" `
+        --build-arg "PIP_INDEX_URL=$PipIndexUrl" `
         --label "ai-sandbox.base-image=$BaseImage" `
         -t ai-sandbox-base:latest (Join-Path $imgDir 'base')
     if ($LASTEXITCODE -ne 0) {
         Exit-WithMessage ("Échec de la construction de l'image de base depuis $BaseImage.`n" +
-            "Vérifiez BaseImage dans $configFile, l'accès au registre (podman login <registre>) " +
-            "et que les dépôts dnf de l'image fournissent les paquets requis.")
+            "Vérifiez BaseImage dans $configFile, l'accès au registre (podman login <registre>), " +
+            "que les dépôts dnf de l'image fournissent les paquets requis " +
+            "et que PipIndexUrl (si renseigné) permet de télécharger les bibliothèques Python.")
     }
 
     foreach ($n in $Names) {
