@@ -1,21 +1,20 @@
 # ai-sandbox
 
-Clic droit sur un dossier → **Lancer IA sandboxée** → Claude ou Gemini.
-Le client IA tourne dans un conteneur Podman qui ne voit **que ce dossier et ses sous-dossiers**.
+Clic droit sur un dossier ou à l'intérieur d'un dossier → **Lancer IA sandboxée** → Claude ou Gemini. Le client IA tourne dans un conteneur Podman qui ne voit **que ce dossier et ses sous-dossiers** :
 
-```
-Explorateur ─► Windows Terminal ─► ai-sandbox.ps1 ─► podman.exe ─► podman machine (WSL)
-                                                                     └─ conteneur
-                                                                        /workspace = votre dossier
-                                                                        settings.json recopié à chaque lancement
-```
+- Les données sont montées dans `/workspace`.
+- La configuration (ex : `settings.json`) est recopiée à chaque lancement.
+- Un conteneur Podman est créé par dossier et est facilement réutilisable.
 
 ## Prérequis
 
-- Windows 10/11, Podman Desktop avec une machine Podman démarrée (rootless recommandé)
-- Windows Terminal (facultatif, sinon console PowerShell classique)
+- Windows 10/11 + Podman (Hyper-V ou WSL) avec une machine Podman démarrée (rootless recommandé).
 
 ## Installation
+
+**Aucun droit administrateur n'est nécessaire.**
+
+### Installation avec le script `install.ps1`
 
 Dans le dossier décompressé :
 
@@ -23,23 +22,15 @@ Dans le dossier décompressé :
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-Le script copie dans `%LOCALAPPDATA%\ai-sandbox` les seuls fichiers nécessaires à l'exécution
-(`ai-sandbox.ps1`, `uninstall.ps1`, `config.psd1`, `clients.psd1`, `lib\`, `images\`), construit
-les images depuis UBI 10 (`ai-sandbox-base`, `ai-sandbox-claude`, `ai-sandbox-gemini`) et ajoute
-le menu contextuel. `install.ps1` lui-même, le README et les fichiers cachés (`.git`,
-`.gitignore`…) ne sont pas installés : relancez l'installation depuis le dossier source.
-Aucun droit administrateur n'est nécessaire.
+Le script :
 
-Sous Windows 11, le menu est dans **Afficher plus d'options** (ou Maj + clic droit).
+- Copie dans `%LOCALAPPDATA%\ai-sandbox` les seuls fichiers nécessaires à l'exécution (`ai-sandbox.ps1`, `uninstall.ps1`, `config.psd1`, `clients.psd1`, `lib\`, `images\`).
+- Construit les images depuis UBI 10 (`ai-sandbox-base`, `ai-sandbox-claude`, `ai-sandbox-gemini`) pour Podman.
+- Ajoute les entrées du menu contextuel dans **Afficher plus d'options** (ou Maj + clic droit).
 
 ### Installation manuelle (sans `install.ps1`)
 
-Si vous préférez ne pas lancer `install.ps1` (par exemple en contexte professionnel, où
-`-ExecutionPolicy Bypass` ou l'écriture dans le registre par un script peuvent déclencher une
-alerte de sécurité), chaque étape peut être faite à la main, une commande à la fois, depuis
-PowerShell. Rien n'exige de droits administrateur, tout reste dans votre profil.
-
-Les commandes ci-dessous supposent que vous êtes dans le dossier décompressé.
+Si vous préférez ne pas lancer `install.ps1` (par exemple en contexte professionnel, où `-ExecutionPolicy Bypass` ou l'écriture dans le registre par un script peuvent déclencher une alerte de sécurité). Les commandes ci-dessous peuvent être exécutées dans Windows Terminal (ou Powershell) dans le dossier décompressé.
 
 **1. Vérifier Podman**
 
@@ -57,21 +48,26 @@ New-Item -ItemType Directory -Force -Path $Dest | Out-Null
 foreach ($item in 'ai-sandbox.ps1', 'clients.psd1', 'config.psd1', 'uninstall.ps1', 'lib', 'images') {
     Copy-Item -LiteralPath $item -Destination $Dest -Recurse -Force
 }
-Get-ChildItem -Path $Dest -Recurse -File | Unblock-File   # retire la marque « téléchargé depuis Internet »
 ```
 
-`Unblock-File` permet d'exécuter `ai-sandbox.ps1` avec la politique d'exécution `RemoteSigned`
-habituelle, sans avoir à la contourner. En cas de réinstallation, ne recopiez pas par-dessus
-un `config.psd1` que vous avez modifié.
+**3. Débloquer les scripts téléchargés depuis Internet**
 
-**3. (Facultatif) Adapter la configuration**
+```powershell
+Get-ChildItem -Path $Dest -Recurse -File | Unblock-File
+```
 
-Éditez `%LOCALAPPDATA%\ai-sandbox\config.psd1` pour `BaseImage` (registre interne),
-`NpmRegistry` et `Settings` (voir plus bas).
+`Unblock-File` permet d'exécuter les différent scripts avec la politique d'exécution `RemoteSigned` habituelle qui autorise l'exécution des scripts créés localement sur votre ordinateur sans exiger de signature par un éditeur de confiance.
 
-**4. Construire les images**
+En cas de réinstallation ou de mise à jour, pensez à exécuter à nouveau cette commande.
+
+**4. (Facultatif) Adapter la configuration**
+
+Mettez à jour `%LOCALAPPDATA%\ai-sandbox\config.psd1` si vous n'utilisez pas les configurations standards (ex : registry d'image personnalisé, ...).
+
+**5. Construire les images**
 
 Si votre registre exige une authentification : `podman login <registre>` au préalable.
+
 Remplacez `BASE` et `NPM` par les valeurs de `config.psd1` (`NPM` peut rester vide).
 
 ```powershell
@@ -86,9 +82,11 @@ podman build --no-cache --build-arg "NPM_REGISTRY=$NPM" -t ai-sandbox-claude:lat
 podman build --no-cache --build-arg "NPM_REGISTRY=$NPM" -t ai-sandbox-gemini:latest .\gemini   # facultatif
 ```
 
-Vérification : `podman images` doit lister `localhost/ai-sandbox-base`, `-claude` et `-gemini`.
+Vérification : `podman images` doit lister :
 
-**5. Utiliser sans menu contextuel**
+- `localhost/ai-sandbox-base`
+- `localhost/ai-sandbox-base-claude`
+- `localhost/ai-sandbox-base-gemini`
 
 À ce stade, la sandbox est déjà utilisable en ligne de commande (voir « En ligne de commande ») :
 
@@ -98,10 +96,9 @@ Vérification : `podman images` doit lister `localhost/ai-sandbox-base`, `-claud
 
 **6. (Facultatif) Ajouter le menu contextuel à la main**
 
-Le menu n'est qu'un ensemble de clés sous `HKCU` (votre utilisateur uniquement). Pour chaque
-entrée, créez une clé dont la sous-clé `command` contient la commande à lancer. Exemple pour
-Claude (l'entrée shell de Claude, puis les deux entrées de Gemini, suivent le même modèle,
-avec `-Shell` et/ou `-Client gemini`) :
+Le menu n'est qu'un ensemble de clés sous `HKCU` (HKEY_CURRENT_USER) dans la base de registre Windows. Pour chaque entrée, créez une clé dont la sous-clé `command` contient la commande à lancer.
+
+Pour créer les entrées de base et les entrées shell (accès au shell du conteneur Claude ou Gemini) :
 
 ```powershell
 $ps1  = "$env:LOCALAPPDATA\ai-sandbox\ai-sandbox.ps1"
@@ -119,128 +116,37 @@ foreach ($b in 'HKCU:\Software\Classes\Directory\shell\AISandbox',
     New-ItemProperty -LiteralPath $k -Name MUIVerb -Value 'Claude' -Force | Out-Null
     Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
         -Value "wt.exe -w new powershell.exe -NoProfile -File `"$ps1`" -Client claude -Path `"%V`""
+    
+    $k = "$b\shell\03-gemini"
+    New-Item -Path "$k\command" -Force | Out-Null
+    New-ItemProperty -LiteralPath $k -Name MUIVerb -Value 'Gemini' -Force | Out-Null
+    Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
+        -Value "wt.exe -w new powershell.exe -NoProfile -File `"$ps1`" -Client gemini -Path `"%V`""
+
+    $k = "$b\shell\02-claude-shell"
+    New-Item -Path "$k\command" -Force | Out-Null
+    New-ItemProperty -LiteralPath $k -Name MUIVerb -Value 'Claude (shell)' -Force | Out-Null
+    Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
+        -Value "wt.exe -w new powershell.exe -NoProfile -File `"$ps1`" -Client claude -Shell -Path `"%V`""
+    
+    $k = "$b\shell\04-gemini-shell"
+    New-Item -Path "$k\command" -Force | Out-Null
+    New-ItemProperty -LiteralPath $k -Name MUIVerb -Value 'Gemini (shell)' -Force | Out-Null
+    Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
+        -Value "wt.exe -w new powershell.exe -NoProfile -File `"$ps1`" -Client gemini -Shell -Path `"%V`""
 }
 ```
 
 - Sans Windows Terminal, retirez le préfixe `wt.exe -w new `.
 - `%V` est remplacé par Windows avec le dossier cliqué.
-- Pour l'entrée shell, ajoutez `-Shell` avant `-Path` (voir « Utilisation »).
-
-#### Détail des clés de registre (pour `regedit`)
-
-Tout est sous `HKEY_CURRENT_USER` (HKCU) : pas de droits administrateur. Les deux arborescences
-suivantes sont **identiques** et doivent toutes deux être créées : la première pour le clic
-droit *sur* un dossier, la seconde pour le clic droit *dans* un dossier ouvert (fond de fenêtre).
-
-```
-HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox
-HKEY_CURRENT_USER\Software\Classes\Directory\Background\shell\AISandbox
-```
-
-Arborescence à reproduire sous chacune des deux clés `AISandbox` :
-
-```
-AISandbox
-│   MUIVerb      REG_SZ     Lancer IA sandboxée
-│   SubCommands  REG_SZ     (chaîne vide)
-│   Icon         REG_SZ     <chemin de podman.exe>,0
-└── shell
-    ├── 01-claude
-    │   │   MUIVerb        REG_SZ     Claude
-    │   └── command
-    │         (Par défaut)  REG_SZ     <commande Claude>
-    ├── 02-claude-shell
-    │   │   MUIVerb        REG_SZ     Claude (shell)
-    │   └── command
-    │         (Par défaut)  REG_SZ     <commande Claude shell>
-    ├── 03-gemini
-    │   │   MUIVerb        REG_SZ     Gemini
-    │   │   CommandFlags   REG_DWORD  0x00000020   (séparateur au-dessus de cette entrée)
-    │   └── command
-    │         (Par défaut)  REG_SZ     <commande Gemini>
-    ├── 04-gemini-shell
-    │   │   MUIVerb        REG_SZ     Gemini (shell)
-    │   └── command
-    │         (Par défaut)  REG_SZ     <commande Gemini shell>
-    └── 05-rebuild
-        │   MUIVerb        REG_SZ     Reconstruire les images
-        │   CommandFlags   REG_DWORD  0x00000020   (séparateur au-dessus de cette entrée)
-        └── command
-              (Par défaut)  REG_SZ     <commande de reconstruction>
-```
-
-Points d'attention :
-
-- `SubCommands` doit exister avec une valeur **vide** : c'est ce qui transforme l'entrée en
-  sous-menu déroulant. Sans elle, Windows n'affiche pas les entrées de `shell`.
-- Le préfixe numérique des sous-clés (`01-`, `02-`…) fixe l'ordre d'affichage.
-- `(Par défaut)` est la valeur sans nom de la sous-clé `command`. Dans regedit : double-clic
-  sur `(Par défaut)` puis saisie de la commande.
-- Pour n'avoir que Claude, ne créez que `01-claude` et `02-claude-shell`.
-- `Icon` : obtenez le chemin avec `(Get-Command podman).Source` ; ajoutez `,0` à la fin
-  (première icône du fichier). Facultatif.
-
-Commandes à saisir (remplacez `<UTILISATEUR>` par votre nom de profil Windows, le chemin doit
-être absolu : regedit n'étend pas `%LOCALAPPDATA%` dans une valeur `REG_SZ`) :
-
-| Entrée | Valeur de `command` |
-|---|---|
-| `01-claude` | `wt.exe -w new powershell.exe -NoProfile -File "C:\Users\<UTILISATEUR>\AppData\Local\ai-sandbox\ai-sandbox.ps1" -Client claude -Path "%V"` |
-| `02-claude-shell` | idem `01-claude`, avec ` -Shell` avant ` -Path` |
-| `03-gemini` | idem `01-claude`, avec `-Client gemini` |
-| `04-gemini-shell` | idem `03-gemini`, avec ` -Shell` avant ` -Path` |
-| `05-rebuild` | `wt.exe -w new powershell.exe -NoProfile -NoExit -File "C:\Users\<UTILISATEUR>\AppData\Local\ai-sandbox\ai-sandbox.ps1" -Rebuild` (pas de `-Client` ni `-Path`) |
-
-- `%V` doit rester tel quel : Windows le remplace par le dossier cliqué.
-- Sans Windows Terminal, supprimez le préfixe `wt.exe -w new `.
-- `install.ps1` ajoute en plus `-ExecutionPolicy Bypass` après `-NoProfile`. C'est inutile si
-  vous avez fait `Unblock-File` (étape 2) avec une politique `RemoteSigned`.
-
-**Import par fichier `.reg`** (alternative à la saisie dans regedit) : enregistrez le contenu
-suivant dans un fichier `ai-sandbox-menu.reg` (encodage Unicode/UTF-16 LE, celui de regedit ;
-si vous l'éditez à la main, enregistrez-le ainsi, sinon `sandboxée` sera mal lu), remplacez
-`<UTILISATEUR>` et `<CHEMIN PODMAN>` (antislashs doublés), puis double-cliquez dessus. L'exemple
-couvre Claude ; pour Gemini, dupliquez les blocs sur le même modèle (`03-gemini`, `04-gemini-shell`). Le bloc est à répéter pour la seconde racine (`...\Directory\Background\shell\...`).
-
-```
-Windows Registry Editor Version 5.00
-
-[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox]
-"MUIVerb"="Lancer IA sandboxée"
-"SubCommands"=""
-"Icon"="<CHEMIN PODMAN>,0"
-
-[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\01-claude]
-"MUIVerb"="Claude"
-
-[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\01-claude\command]
-@="wt.exe -w new powershell.exe -NoProfile -File \"C:\\Users\\<UTILISATEUR>\\AppData\\Local\\ai-sandbox\\ai-sandbox.ps1\" -Client claude -Path \"%V\""
-
-[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\02-claude-shell]
-"MUIVerb"="Claude (shell)"
-
-[HKEY_CURRENT_USER\Software\Classes\Directory\shell\AISandbox\shell\02-claude-shell\command]
-@="wt.exe -w new powershell.exe -NoProfile -File \"C:\\Users\\<UTILISATEUR>\\AppData\\Local\\ai-sandbox\\ai-sandbox.ps1\" -Client claude -Shell -Path \"%V\""
-```
-
-Dans un fichier `.reg`, `\` s'écrit `\\` et `"` s'écrit `\"` ; une valeur `REG_DWORD`
-s'écrit `"CommandFlags"=dword:00000020`.
-
-Pour retirer le menu : supprimez les deux clés `AISandbox` (voir « Désinstallation » ci-dessous).
-Le menu apparaît sans redémarrage ; sous Windows 11, il est dans **Afficher plus d'options**.
 
 ## Utilisation
 
 | Entrée du menu | Effet |
 |---|---|
-| Claude / Gemini | Session normale : le client demande avant d'agir |
+| Claude / Gemini | Ouvre directement l'agent IA dans la sandbox du dossier |
 | Claude (shell) / Gemini (shell) | Ouvre un `bash` dans la sandbox du dossier, sans lancer l'agent |
 | Reconstruire les images | `ai-sandbox.ps1 -Rebuild` : reconstruit les images et met à jour Claude Code et Gemini CLI. La fenêtre reste ouverte pour lire le résultat |
-
-Les entrées « shell » ouvrent un terminal dans **le même conteneur** que l'agent du dossier
-(un conteneur par couple client + dossier) : vous pouvez manipuler les fichiers en shell pendant
-qu'un agent tourne dans une autre fenêtre. Ils partagent les outils installés et la configuration
-du client, mais pas le terminal.
 
 **Authentification** : le plus simple est un `settings.json` contenant votre clé ou votre
 gateway (voir « Réglages du client IA »). Vous pouvez aussi définir `ANTHROPIC_API_KEY` ou
