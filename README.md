@@ -151,8 +151,7 @@ foreach ($b in 'HKCU:\Software\Classes\Directory\shell\AISandbox',
 **Authentification** : le plus simple est un `settings.json` contenant votre clé ou votre
 gateway (voir « Réglages du client IA »). Vous pouvez aussi définir `ANTHROPIC_API_KEY` ou
 `GEMINI_API_KEY` dans vos variables d'environnement Windows : elles sont transmises à chaque
-session sans être stockées dans le conteneur. Une connexion par compte (URL + code à coller)
-reste possible, mais elle est propre à chaque sandbox : à refaire pour chaque projet.
+session sans être stockées dans le conteneur.
 
 ### En ligne de commande
 
@@ -192,23 +191,6 @@ Settings = @{
     claude = '%USERPROFILE%\.claude\settings.json'
 }
 ```
-
-- **Jamais dans l'image** : la clé n'est pas inscrite dans les images Podman. Changer de clé
-  ne demande aucune reconstruction : la session suivante prend la nouvelle valeur.
-- **Copie simple** : le fichier remplace celui de la sandbox. Les permissions « toujours
-  autoriser » accordées en session ne sont pas perdues : Claude les enregistre dans le projet
-  (`.claude/settings.local.json` dans votre dossier).
-- **JSON invalide** : la copie est refusée et le fichier précédent est conservé.
-- **Premier lancement** : l'écran d'accueil de Claude Code est sauté, pour arriver
-  directement dans la session (la confirmation de confiance du dossier est demandée une fois
-  par projet).
-- Si votre `settings.json` Windows contient des hooks ou des chemins propres à Windows, pointez
-  plutôt vers un fichier dédié, par exemple `%LOCALAPPDATA%\ai-sandbox\claude-settings.json`.
-- La ligne `Réglages :` affichée au lancement indique le fichier utilisé ou le problème rencontré.
-- Une installation antérieure conserve son ancien `config.psd1` : ajoutez-y le bloc `Settings`.
-
-À noter : l'IA dans la sandbox peut lire cette clé (elle en a besoin pour fonctionner).
-Préférez une clé dédiée, à portée et durée limitées, si votre gateway le permet.
 
 ## Image de base et registre d'entreprise
 
