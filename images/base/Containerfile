@@ -13,7 +13,10 @@ RUN dnf install -y \
 
 # Outils de confort : installés s'ils existent dans les dépôts configurés
 # (UBI public ou miroir d'entreprise), ignorés sinon.
-RUN for p in jq ripgrep fd-find tree less nano unzip zip wget file diffutils patch; do \
+RUN for p in jq ripgrep fd-find tree less nano unzip zip wget file diffutils patch \
+         poppler-utils sqlite openssh-clients rsync bind-utils iputils \
+         dejavu-sans-fonts dejavu-serif-fonts dejavu-sans-mono-fonts \
+         liberation-sans-fonts liberation-serif-fonts liberation-mono-fonts; do \
         dnf install -y "$p" >/dev/null 2>&1 && echo "+ $p" || echo "- $p (absent des dépôts, ignoré)"; \
     done \
  && dnf clean all \
@@ -50,6 +53,21 @@ ARG NPM_REGISTRY=""
 RUN npm config set cafile /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
  && if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
  && echo "Registre npm : $(npm config get registry)"
+
+# Miroir pip : vide = PyPI public. Écrit dans ~/.config/pip/pip.conf de dev, donc
+# utilisé pour les bibliothèques ci-dessous ET par l'IA dans la sandbox (pip install).
+ARG PIP_INDEX_URL=""
+RUN pip config set global.cert /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
+ && if [ -n "$PIP_INDEX_URL" ]; then pip config set global.index-url "$PIP_INDEX_URL"; fi \
+ && echo "Index pip : ${PIP_INDEX_URL:-public (pypi.org)}"
+
+# Lecture et génération de documents (Office, PDF) : wheels autonomes, sans
+# dépendance système. Obligatoires : le build échoue si l'une est introuvable.
+RUN pip install --no-cache-dir \
+        openpyxl xlsxwriter pandas python-docx python-pptx \
+        pypdf pdfplumber pymupdf reportlab pillow \
+        "markitdown[docx,pptx,xlsx,pdf]" \
+ && python3 -c "import openpyxl, xlsxwriter, pandas, docx, pptx, pypdf, pdfplumber, fitz, reportlab, PIL, markitdown"
 
 WORKDIR /workspace
 

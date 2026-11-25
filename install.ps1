@@ -8,12 +8,14 @@
     powershell -ExecutionPolicy Bypass -File .\install.ps1 -NoBuild
     powershell -ExecutionPolicy Bypass -File .\install.ps1 -BaseImage registry.mon-entreprise.fr/ubi10/ubi:latest
     powershell -ExecutionPolicy Bypass -File .\install.ps1 -NpmRegistry https://nexus.mon-entreprise.fr/repository/npm-proxy/
+    powershell -ExecutionPolicy Bypass -File .\install.ps1 -PipIndexUrl https://nexus.mon-entreprise.fr/repository/pypi-proxy/simple
 #>
 [CmdletBinding()]
 param(
     [switch]$NoBuild,     # ne reconstruit pas les images (menu seulement)
     [string]$BaseImage,   # image de base à utiliser (enregistrée dans config.psd1)
-    [string]$NpmRegistry  # registre npm à utiliser ('' = public) (enregistré dans config.psd1)
+    [string]$NpmRegistry, # registre npm à utiliser ('' = public) (enregistré dans config.psd1)
+    [string]$PipIndexUrl  # index pip à utiliser ('' = PyPI public) (enregistré dans config.psd1)
 )
 
 $Src  = $PSScriptRoot
@@ -86,10 +88,12 @@ function Set-ConfigValue([string]$Key, [string]$Value) {
 
 if ($PSBoundParameters.ContainsKey('BaseImage'))   { Set-ConfigValue 'BaseImage'   $BaseImage }
 if ($PSBoundParameters.ContainsKey('NpmRegistry')) { Set-ConfigValue 'NpmRegistry' $NpmRegistry }
+if ($PSBoundParameters.ContainsKey('PipIndexUrl')) { Set-ConfigValue 'PipIndexUrl' $PipIndexUrl }
 
 $cfg = Import-PowerShellDataFile $configPath
 Write-Host "Image de base : $($cfg.BaseImage)" -ForegroundColor Cyan
 Write-Host "Registre npm  : $(if ($cfg.NpmRegistry) { $cfg.NpmRegistry } else { 'public (registry.npmjs.org)' })" -ForegroundColor Cyan
+Write-Host "Index pip     : $(if ($cfg.PipIndexUrl) { $cfg.PipIndexUrl } else { 'public (pypi.org)' })" -ForegroundColor Cyan
 
 $Clients = Import-PowerShellDataFile (Join-Path $Dest 'clients.psd1')
 $ps1     = Join-Path $Dest 'ai-sandbox.ps1'
