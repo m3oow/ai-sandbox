@@ -3,6 +3,9 @@
 # puis relancer install.ps1 (reconstruit les images et le menu).
 #   SettingsTarget : où recopier le fichier de réglages Windows (config.psd1 > Settings)
 #   OnboardingFile : fichier d'état créé pour sauter l'écran d'accueil (facultatif)
+#   StateDir       : dossier d'état du client (historique, sessions, connexion), placé
+#                    dans un volume propre à chaque sandbox : il survit à la recréation
+#                    du conteneur lors d'un -Rebuild
 @{
     claude = @{
         Label          = 'Claude'
@@ -11,6 +14,7 @@
         EnvKeys        = @('ANTHROPIC_API_KEY')
         SettingsTarget = '/home/dev/.claude-config/settings.json'
         OnboardingFile = '/home/dev/.claude-config/.claude.json'
+        StateDir       = '/home/dev/.claude-config'
     }
     gemini = @{
         Label          = 'Gemini'
@@ -18,5 +22,6 @@
         YoloArgs       = @('--yolo')
         EnvKeys        = @('GEMINI_API_KEY', 'GOOGLE_API_KEY')
         SettingsTarget = '/home/dev/.gemini/settings.json'
+        StateDir       = '/home/dev/.gemini'
     }
 }

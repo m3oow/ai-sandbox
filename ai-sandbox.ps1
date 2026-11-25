@@ -5,9 +5,12 @@
 
 .DESCRIPTION
     - Un conteneur persistant par couple (client, dossier) : les outils que l'IA
-      installe (apt, pip, npm) restent disponibles pour ce projet.
-    - La configuration du client IA (historique, etat) est propre a chaque
-      conteneur : rien n'est partage entre projets.
+      installe (dnf, pip, npm) restent disponibles pour ce projet, jusqu'au
+      prochain -Rebuild.
+    - La configuration du client IA (historique, sessions, etat) est propre a
+      chaque sandbox, dans un volume dedie : rien n'est partage entre projets.
+    - -Rebuild recree toutes les sandboxes sur la nouvelle image en conservant
+      ce volume, donc l'historique de l'agent IA.
     - Le fichier de reglages Windows (config.psd1 > Settings) est recopie dans
       le conteneur a chaque lancement.
     - Aucun autre fichier de l'hote n'est monte.
@@ -27,9 +30,9 @@ param(
     [string]$Path,
     [switch]$Yolo,      # mode autonome (aucune demande de permission)
     [switch]$Shell,     # ouvre bash au lieu du client IA
-    [switch]$Reset,     # supprime la sandbox de ce dossier (pas vos fichiers)
+    [switch]$Reset,     # supprime la sandbox de ce dossier et son historique (pas vos fichiers)
     [switch]$List,      # liste toutes les sandboxes
-    [switch]$Rebuild,   # reconstruit les images (met a jour les clients IA)
+    [switch]$Rebuild,   # reconstruit les images et recree les sandboxes (historique conserve)
     [switch]$StopAll    # arrete toutes les sandboxes en cours
 )
 
@@ -121,6 +124,132 @@ function Show-List {
     $rows | Sort-Object Dossier, Client | Format-Table -AutoSize | Out-String -Width 300 | Write-Host
 }
 
+function Get-ClientImage([string]$ClientName) { "localhost/ai-sandbox-${ClientName}:latest" }
+
+# Volume d'état (historique de l'agent IA) associé à une sandbox
+function Get-StateVolume([string]$Name) { "$Name-state" }
+
+# Vrai si la sandbox n'utilise pas l'image actuelle de son client
+function Test-SandboxOutdated([string]$Name, [string]$ClientName) {
+    $current = "$(podman image inspect --format '{{.Id}}' (Get-ClientImage $ClientName) 2>$null)".Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $current) { return $false }
+    $used = "$(podman inspect --format '{{.Image}}' $Name 2>$null)".Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $used) { return $false }
+    return ($used -ne $current)
+}
+
+# Crée la sandbox $Name pour ($ClientName, $SandboxPath), avec son volume d'état.
+# -NoStart : crée le conteneur sans le démarrer. Renvoie $true en cas de succès.
+function New-Sandbox {
+    param(
+        [string]$ClientName,
+        [string]$SandboxPath,
+        [string]$Name,
+        [switch]$NoStart
+    )
+    $clientCfg = $Clients[$ClientName]
+
+    # @(...) obligatoire : un tableau d'un seul élément renvoyé par if devient une chaîne
+    $runArgs = @(if ($NoStart) { 'create' } else { 'run', '-d' })
+    $runArgs += @(
+        '--init',
+        '--name', $Name,
+        '--hostname', "sandbox-$ClientName",
+        '-v', "${SandboxPath}:/workspace",
+        '-w', '/workspace',
+        '--label', "ai-sandbox.path=$SandboxPath",
+        '--label', "ai-sandbox.client=$ClientName"
+    )
+
+    if ($clientCfg.StateDir) {
+        # Volume créé explicitement pour porter les labels (nettoyage par -Purge).
+        # Vide à sa création : Podman y copie le contenu du dossier de l'image au
+        # premier montage. Il est réutilisé tel quel lors d'une recréation.
+        $vol = Get-StateVolume $Name
+        podman volume exists $vol
+        if ($LASTEXITCODE -ne 0) {
+            podman volume create --label "ai-sandbox.path=$SandboxPath" `
+                --label "ai-sandbox.client=$ClientName" $vol | Out-Null
+            if ($LASTEXITCODE -ne 0) { return $false }
+        }
+        $runArgs += @('-v', "${vol}:$($clientCfg.StateDir)")
+    }
+
+    if ($null -eq $script:Rootless) {
+        $script:Rootless = "$(podman info --format '{{.Host.Security.Rootless}}')".Trim()
+    }
+    if ($script:Rootless -eq 'true') {
+        # UID 1000 de la machine Podman <-> utilisateur "dev" du conteneur
+        $runArgs += '--userns=keep-id:uid=1000,gid=1000'
+    }
+    $runArgs += Get-ClientImage $ClientName
+
+    & podman @runArgs | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+
+# Après un rebuild : recrée sur la nouvelle image chaque sandbox qui ne l'utilise
+# pas encore. Le volume d'état est conservé ; les sessions ouvertes sont coupées.
+function Update-AllSandboxes {
+    $recreated = @(); $unchanged = @(); $orphans = @(); $failed = @()
+
+    foreach ($c in Get-Sandboxes) {
+        $name       = @($c.Names)[0]
+        $clientName = $c.Labels.'ai-sandbox.client'
+        $sbPath     = $c.Labels.'ai-sandbox.path'
+        $row = [pscustomobject]@{ Nom = $name; Client = $clientName; Dossier = $sbPath; Detail = '' }
+
+        if (-not $Clients.ContainsKey($clientName)) {
+            $row.Detail = "client '$clientName' absent de clients.psd1"
+            $failed += $row; continue
+        }
+        if (-not (Test-SandboxOutdated $name $clientName)) { $unchanged += $row; continue }
+
+        # Dossier supprimé, déplacé, renommé ou disque non branché : la recréation
+        # échouerait (montage impossible), on laisse la sandbox telle quelle.
+        if (-not (Test-Path -LiteralPath $sbPath -PathType Container)) { $orphans += $row; continue }
+
+        $wasRunning = ("$($c.State)" -eq 'running')
+        Write-Host "Recréation de $name ($sbPath)..." -ForegroundColor DarkGray
+        podman rm -f $name | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            $row.Detail = 'suppression du conteneur impossible'
+            $failed += $row; continue
+        }
+        if (New-Sandbox -ClientName $clientName -SandboxPath $sbPath -Name $name -NoStart:(-not $wasRunning)) {
+            $recreated += $row
+        } else {
+            $row.Detail = 'création impossible (historique conservé, nouvel essai au prochain lancement)'
+            $failed += $row
+        }
+    }
+
+    # Anciennes images ai-sandbox devenues inutiles (les images clients héritent
+    # du label de l'image de base). Les autres images de Podman ne sont pas touchées.
+    podman image prune -f --filter label=ai-sandbox.base-image | Out-Null
+
+    Write-Host "`n== Sandboxes ==" -ForegroundColor Cyan
+    Write-Host "  Recréées sur la nouvelle image : $($recreated.Count)" -ForegroundColor Green
+    foreach ($r in $recreated) { Write-Host "    $($r.Client)  $($r.Dossier)" }
+    Write-Host "  Déjà à jour : $($unchanged.Count)"
+
+    if ($failed) {
+        Write-Host "  En échec : $($failed.Count)" -ForegroundColor Red
+        foreach ($r in $failed) { Write-Host "    $($r.Client)  $($r.Dossier) : $($r.Detail)" -ForegroundColor Red }
+    }
+
+    if ($orphans) {
+        Write-Host "  Ignorées, dossier introuvable : $($orphans.Count)" -ForegroundColor Yellow
+        foreach ($r in $orphans) {
+            Write-Host "    $($r.Client)  $($r.Dossier)" -ForegroundColor Yellow
+            Write-Host "      nettoyage : podman rm -f $($r.Nom) ; podman volume rm $(Get-StateVolume $r.Nom)" -ForegroundColor DarkGray
+        }
+        Write-Host ("  Disque non branché : rebranchez-le puis relancez la sandbox, elle sera recréée`n" +
+                    "  sur la nouvelle image. Dossier supprimé ou déplacé : la sandbox est orpheline,`n" +
+                    "  supprimez-la avec les commandes de nettoyage ci-dessus (historique compris).") -ForegroundColor Yellow
+    }
+}
+
 # ---------------------------------------------------------- commandes globales
 
 Assert-Podman
@@ -136,7 +265,8 @@ if ($StopAll) {
 
 if ($Rebuild) {
     Build-Images @($Clients.Keys | Sort-Object)
-    Write-Host "`nImages à jour. Les sandboxes existantes gardent l'ancienne image : -Reset pour les recréer." -ForegroundColor Green
+    Write-Host "`nImages à jour." -ForegroundColor Green
+    Update-AllSandboxes
     return
 }
 
@@ -184,13 +314,26 @@ $sha   = [Security.Cryptography.SHA1]::Create()
 $bytes = [Text.Encoding]::UTF8.GetBytes($Path.ToLowerInvariant())
 $hash  = -join ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') })
 $Name  = "ai-$Client-$($hash.Substring(0, 10))"
-$Image = "localhost/ai-sandbox-${Client}:latest"
+$Image = Get-ClientImage $Client
 
 if ($Reset) {
+    # Supprime tout : le conteneur et l'historique de l'agent IA (volume d'état)
+    $found = $false
     podman container exists $Name
     if ($LASTEXITCODE -eq 0) {
         podman rm -f $Name | Out-Null
-        Write-Host "Sandbox $Client supprimée pour $Path (vos fichiers sont intacts)." -ForegroundColor Green
+        if ($LASTEXITCODE -ne 0) { Exit-WithMessage "Impossible de supprimer la sandbox $Name." }
+        $found = $true
+    }
+    $vol = Get-StateVolume $Name
+    podman volume exists $vol
+    if ($LASTEXITCODE -eq 0) {
+        podman volume rm -f $vol | Out-Null
+        if ($LASTEXITCODE -ne 0) { Exit-WithMessage "Impossible de supprimer l'historique $vol." }
+        $found = $true
+    }
+    if ($found) {
+        Write-Host "Sandbox $Client et son historique supprimés pour $Path (vos fichiers sont intacts)." -ForegroundColor Green
     } else {
         Write-Host "Aucune sandbox $Client pour $Path."
     }
@@ -205,27 +348,26 @@ if ($LASTEXITCODE -ne 0) {
     Build-Images @($Client)
 }
 
+$isNew     = $false
+$recreated = $false
 podman container exists $Name
-if ($LASTEXITCODE -ne 0) {
-    $runArgs = @(
-        'run', '-d', '--init',
-        '--name', $Name,
-        '--hostname', "sandbox-$Client",
-        '-v', "${Path}:/workspace",
-        '-w', '/workspace',
-        '--label', "ai-sandbox.path=$Path",
-        '--label', "ai-sandbox.client=$Client"
-    )
-    $rootless = "$(podman info --format '{{.Host.Security.Rootless}}')".Trim()
-    if ($rootless -eq 'true') {
-        # UID 1000 de la machine Podman <-> utilisateur "dev" du conteneur
-        $runArgs += '--userns=keep-id:uid=1000,gid=1000'
-    }
-    $runArgs += $Image
+$exists = ($LASTEXITCODE -eq 0)
 
-    & podman @runArgs | Out-Null
-    if ($LASTEXITCODE -ne 0) { Exit-WithMessage "Impossible de créer la sandbox $Name." }
-    $isNew = $true
+# Sandbox restée sur une ancienne image (recréation échouée ou dossier absent
+# lors du dernier -Rebuild) : recréation, l'historique est conservé dans le volume.
+if ($exists -and (Test-SandboxOutdated $Name $Client)) {
+    Write-Host 'Image mise à jour : recréation de la sandbox (historique conservé)...' -ForegroundColor Yellow
+    podman rm -f $Name | Out-Null
+    if ($LASTEXITCODE -ne 0) { Exit-WithMessage "Impossible de supprimer l'ancienne sandbox $Name." }
+    $exists    = $false
+    $recreated = $true
+}
+
+if (-not $exists) {
+    if (-not (New-Sandbox -ClientName $Client -SandboxPath $Path -Name $Name)) {
+        Exit-WithMessage "Impossible de créer la sandbox $Name."
+    }
+    $isNew = -not $recreated
 } else {
     $running = "$(podman inspect --format '{{.State.Running}}' $Name)".Trim()
     if ($running -ne 'true') {
@@ -273,7 +415,7 @@ $mode = if ($Shell) { 'shell bash' } elseif ($Yolo) { 'AUTONOME (sans demande de
 $Host.UI.RawUI.WindowTitle = "$($cfg.Label) sandbox - $(Split-Path $Path -Leaf)"
 
 Write-Host ''
-Write-Host "  Sandbox  : $Name$(if ($isNew) { ' (nouvelle)' })" -ForegroundColor Cyan
+Write-Host "  Sandbox  : $Name$(if ($isNew) { ' (nouvelle)' } elseif ($recreated) { ' (recréée sur la nouvelle image)' })" -ForegroundColor Cyan
 Write-Host "  Dossier  : $Path  ->  /workspace" -ForegroundColor Cyan
 Write-Host "  Client   : $($cfg.Label)   Mode : $mode" -ForegroundColor Cyan
 if ($settingsSrc) {
