@@ -25,6 +25,7 @@
     ai-sandbox.ps1 -Reset -Path "C:\Projets\demo"
     ai-sandbox.ps1 -Rebuild
     ai-sandbox.ps1 -Update
+    ai-sandbox.ps1 -ResetAll              # supprime toutes les sandboxes, leurs volumes et les anciennes images
     ai-sandbox.ps1 -StopAll
 #>
 [CmdletBinding()]
@@ -37,6 +38,8 @@ param(
     [switch]$List,      # liste toutes les sandboxes
     [switch]$Rebuild,   # reconstruit les images (met a jour les clients IA)
     [switch]$Update,    # recree les sandboxes sur la derniere image (historique conserve)
+    [switch]$ResetAll,  # supprime TOUTES les sandboxes, leurs volumes et les anciennes images (garde les :latest)
+    [switch]$Force,     # avec -ResetAll : pas de demande de confirmation
     [switch]$StopAll    # arrete toutes les sandboxes en cours
 )
 
@@ -132,6 +135,13 @@ function Get-ClientImage([string]$ClientName) { "localhost/ai-sandbox-${ClientNa
 
 # Volume d'état (historique de l'agent IA) associé à une sandbox
 function Get-StateVolume([string]$Name) { "$Name-state" }
+
+# Supprime les anciennes images ai-sandbox devenues inutiles (sans tag : les
+# images clients héritent du label de l'image de base). Les images :latest et
+# les autres images de Podman ne sont pas touchées.
+function Remove-ObsoleteImages {
+    podman image prune -f --filter label=ai-sandbox.base-image | Out-Null
+}
 
 # Vrai si la sandbox n'utilise pas l'image actuelle de son client
 function Test-SandboxOutdated([string]$Name, [string]$ClientName) {
@@ -238,9 +248,7 @@ function Update-AllSandboxes {
         }
     }
 
-    # Anciennes images ai-sandbox devenues inutiles (les images clients héritent
-    # du label de l'image de base). Les autres images de Podman ne sont pas touchées.
-    podman image prune -f --filter label=ai-sandbox.base-image | Out-Null
+    Remove-ObsoleteImages
 
     Write-Host "`n== Sandboxes ==" -ForegroundColor Cyan
     Write-Host "  Recréées sur la nouvelle image : $($recreated.Count)" -ForegroundColor Green
@@ -264,11 +272,68 @@ function Update-AllSandboxes {
     }
 }
 
+# -ResetAll : supprime toutes les sandboxes, TOUS leurs volumes (historique des agents IA
+# compris) et les anciennes images ai-sandbox. Les images :latest, les dossiers de
+# travail et les autres ressources Podman ne sont pas touchés.
+function Reset-All {
+    $containers = @(podman ps -aq --filter label=ai-sandbox.path)
+    # Volumes d'état (label) + volumes partagés d'anciennes versions (ai-sandbox-*)
+    $volumes = @(podman volume ls -q --filter label=ai-sandbox.path) +
+               @(podman volume ls --format '{{.Name}}' | Where-Object { $_ -like 'ai-sandbox-*' })
+    $volumes = @($volumes | Where-Object { $_ } | Sort-Object -Unique)
+    $images  = @(podman image ls -q --filter dangling=true --filter label=ai-sandbox.base-image)
+
+    if (-not $containers -and -not $volumes -and -not $images) {
+        Write-Host 'Rien à supprimer.'
+        return
+    }
+
+    Write-Host "`n== Réinitialisation complète ==" -ForegroundColor Cyan
+    Write-Host "  Sandboxes à supprimer        : $($containers.Count)"
+    Write-Host "  Volumes à supprimer          : $($volumes.Count) (historique des agents IA compris)"
+    Write-Host "  Anciennes images à supprimer : $($images.Count) (les images :latest sont conservées)"
+    Write-Host '  Vos dossiers de travail ne sont pas touchés.'
+
+    if (-not $Force) {
+        Write-Host ''
+        Write-Host "Attention : l'historique des agents IA et les outils installés dans les sandboxes seront perdus définitivement." -ForegroundColor Yellow
+        $answer = Read-Host 'Confirmer la suppression ? [o/N]'
+        if ($answer -notmatch '^[oOyY]') {
+            Write-Host 'Annulé : rien n''a été supprimé.'
+            return
+        }
+    }
+
+    # Conteneurs d'abord (sinon volumes et images restent « utilisés »)
+    $failed = 0
+    foreach ($id in $containers) {
+        podman rm -f $id | Out-Null
+        if ($LASTEXITCODE -ne 0) { $failed++ }
+    }
+    foreach ($v in $volumes) {
+        podman volume rm -f $v | Out-Null
+        if ($LASTEXITCODE -ne 0) { $failed++ }
+    }
+    Remove-ObsoleteImages
+
+    Write-Host "`n== Bilan ==" -ForegroundColor Cyan
+    Write-Host "  Sandboxes supprimées         : $($containers.Count)"
+    Write-Host "  Volumes supprimés            : $($volumes.Count)"
+    Write-Host "  Anciennes images supprimées  : $($images.Count)"
+    if ($failed) {
+        Write-Host "  Suppressions en échec : $failed (relancez, ou vérifiez avec podman ps -a / podman volume ls)" -ForegroundColor Red
+    } else {
+        Write-Host "`nRéinitialisation terminée." -ForegroundColor Green
+    }
+}
+
 # ---------------------------------------------------------- commandes globales
 
 Assert-Podman
 
 if ($List)    { Show-List; return }
+
+if ($ResetAll) { Reset-All; return }
 
 if ($StopAll) {
     $ids = podman ps -q --filter label=ai-sandbox.path
