@@ -73,11 +73,14 @@ Get-ChildItem -Path $Dest -Recurse -File | Unblock-File
 $configPath = Join-Path $Dest 'config.psd1'
 
 function Set-ConfigValue([string]$Key, [string]$Value) {
+    if ($Value -match '[\r\n]') { Fail "Valeur invalide pour $Key (retour à la ligne)." }
     $content = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8
     $escaped = $Value.Trim().Replace("'", "''")
     $pattern = "(?m)^([ \t]*)$Key[ \t]*=[^\r\n]*"
     if ([regex]::IsMatch($content, $pattern)) {
-        $content = [regex]::Replace($content, $pattern, "`${1}$Key = '$escaped'")
+        # MatchEvaluator : un « $ » dans la valeur n'est pas interprété comme une substitution
+        $line = "$Key = '$escaped'"
+        $content = [regex]::Replace($content, $pattern, { param($m) $m.Groups[1].Value + $line })
     } else {
         # clé absente (ancienne configuration) : ajoutée avant l'accolade finale
         $idx = $content.LastIndexOf('}')
@@ -117,10 +120,16 @@ function New-MenuCommand([string]$ClientName, [string]$Mode) {
         if ($wt) { return "wt.exe -w new $cmd" }
         return $cmd
     }
-    $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1`" -Client $ClientName"
+    # Le dossier cliqué (%V) n'est jamais passé à wt.exe : wt découpe sa ligne de
+    # commande sur « ; », même entre guillemets, et un dossier nommé « x; nt calc »
+    # lancerait une commande sur l'hôte. Avec Windows Terminal, une PowerShell masquée
+    # (-NewWindow) rouvre le script dans wt en neutralisant ce risque.
+    $cmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass'
+    if ($wt) { $cmd += ' -WindowStyle Hidden' }
+    $cmd += " -File `"$ps1`" -Client $ClientName"
     if ($Mode -eq 'shell') { $cmd += ' -Shell' }
+    if ($wt) { $cmd += ' -NewWindow' }
     $cmd += ' -Path "%V"'
-    if ($wt) { return "wt.exe -w new $cmd" }
     return $cmd
 }
 

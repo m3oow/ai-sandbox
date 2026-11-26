@@ -116,25 +116,25 @@ foreach ($b in 'HKCU:\Software\Classes\Directory\shell\AISandbox',
     New-Item -Path "$k\command" -Force | Out-Null
     New-ItemProperty -LiteralPath $k -Name MUIVerb -Value 'Claude' -Force | Out-Null
     Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
-        -Value "wt.exe -w new powershell.exe -NoProfile -File `"$ps1`" -Client claude -Path `"%V`""
+        -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$ps1`" -Client claude -NewWindow -Path `"%V`""
     
     $k = "$b\shell\03-gemini"
     New-Item -Path "$k\command" -Force | Out-Null
     New-ItemProperty -LiteralPath $k -Name MUIVerb -Value 'Gemini' -Force | Out-Null
     Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
-        -Value "wt.exe -w new powershell.exe -NoProfile -File `"$ps1`" -Client gemini -Path `"%V`""
+        -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$ps1`" -Client gemini -NewWindow -Path `"%V`""
 
     $k = "$b\shell\02-claude-shell"
     New-Item -Path "$k\command" -Force | Out-Null
     New-ItemProperty -LiteralPath $k -Name MUIVerb -Value 'Claude (shell)' -Force | Out-Null
     Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
-        -Value "wt.exe -w new powershell.exe -NoProfile -File `"$ps1`" -Client claude -Shell -Path `"%V`""
+        -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$ps1`" -Client claude -Shell -NewWindow -Path `"%V`""
     
     $k = "$b\shell\04-gemini-shell"
     New-Item -Path "$k\command" -Force | Out-Null
     New-ItemProperty -LiteralPath $k -Name MUIVerb -Value 'Gemini (shell)' -Force | Out-Null
     Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
-        -Value "wt.exe -w new powershell.exe -NoProfile -File `"$ps1`" -Client gemini -Shell -Path `"%V`""
+        -Value "powershell.exe -NoProfile -WindowStyle Hidden -File `"$ps1`" -Client gemini -Shell -NewWindow -Path `"%V`""
 
     # Maintenance : -NoExit garde la fenêtre ouverte pour lire le résultat
     $k = "$b\shell\05-rebuild"
@@ -152,8 +152,14 @@ foreach ($b in 'HKCU:\Software\Classes\Directory\shell\AISandbox',
 }
 ```
 
-- Sans Windows Terminal, retirez le préfixe `wt.exe -w new `.
 - `%V` est remplacé par Windows avec le dossier cliqué.
+- **Ne passez jamais `%V` à `wt.exe`** (`wt.exe -w new powershell.exe … -Path "%V"`) :
+  Windows Terminal découpe sa ligne de commande sur `;`, même entre guillemets, et un dossier
+  nommé par exemple `x; nt calc` lancerait `calc` sur Windows. `-NewWindow` fait rouvrir le
+  script dans Windows Terminal par une PowerShell masquée, sans ce risque (et dans une console
+  classique si le chemin contient un `;`). Sans Windows Terminal, retirez `-WindowStyle Hidden`
+  et `-NewWindow`.
+- Les entrées de maintenance ci-dessus ne contiennent pas `%V` : `wt.exe` peut y être utilisé.
 
 ## Utilisation
 
@@ -275,16 +281,50 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -BaseImage registry.mon-e
 
 ## Modèle de sécurité
 
+Considérez l'IA de la sandbox comme **non fiable** : un fichier, une page web ou une
+dépendance malveillante peut la manipuler (injection de prompt), a fortiori en mode autonome.
+
 Ce que le conteneur **ne voit pas** : le reste de vos disques, votre profil Windows,
 `~/.ssh`, vos identifiants, les autres projets.
+
+Garde-fous du lanceur :
+- refus des disques entiers, des lecteurs et chemins réseau, de `C:\Users`, de votre profil,
+  de OneDrive et `Public` (et de tout dossier qui les contient) ;
+- refus de `Windows`, `Program Files`, `ProgramData`, `AppData` (dont le dossier Démarrage et
+  l'installation d'ai-sandbox), des profils PowerShell (`Documents\WindowsPowerShell`,
+  `Documents\PowerShell`) et de `~\.ssh`, `.aws`, `.azure`, `.kube`, `.docker`, `.gnupg`,
+  `.config`, `.claude`, `.gemini`, `.vscode` : ni ces dossiers, ni leurs sous-dossiers, ni un
+  dossier qui les contient (l'IA pourrait y déposer du code exécuté par Windows) ;
+- contrôle sur le **chemin réel** : jonctions et liens symboliques sont résolus (Podman monte
+  la cible d'un lien), et c'est ce chemin réel qui est monté ;
+- refus d'une machine Podman en mode **rootful** (root dans la sandbox serait root de la
+  machine Podman, qui a accès à vos fichiers Windows), sauf `AllowRootful = $true` ;
+- les clés d'API et le contenu de `settings.json` sont transmis par l'environnement de
+  `podman.exe`, jamais sur sa ligne de commande (visible des autres processus, journalisée
+  par l'audit Windows ou un EDR) ;
+- la sandbox est **arrêtée à la fermeture de la dernière session** : aucun processus lancé
+  par l'IA en arrière-plan ne continue sans surveillance (fermer la fenêtre du terminal
+  au lieu de quitter l'agent peut empêcher cet arrêt : `-StopAll` au besoin).
 
 Ce qui reste possible :
 - modifier ou supprimer le contenu du dossier monté → travaillez sur un dossier sous git
   ou sauvegardé, surtout en mode autonome ;
-- accéder à Internet (nécessaire pour l'API et l'installation d'outils).
-
-Garde-fous du lanceur : refus des disques entiers, de `C:\Users`, de votre profil,
-de `Windows`, `Program Files`, `ProgramData`, `AppData`, et des chemins réseau.
+- **faire exécuter du code par Windows via le dossier monté** : ce que l'IA écrit dans
+  `.git/config` (`core.fsmonitor`, `core.hooksPath`…), `.git/hooks/`, un dépôt git imbriqué,
+  `.vscode/tasks.json`, `.claude/settings.json` (hooks), `.mcp.json`, `package.json`
+  (scripts), un `Makefile`, un raccourci `.lnk`/`.url` ou un `desktop.ini` peut s'exécuter
+  quand vous ouvrez ce dossier avec git, VS Code, un agent IA ou l'Explorateur sous Windows.
+  Après chaque session, le lanceur **signale** les fichiers de ce type créés ou modifiés
+  (`AuditHostFiles`, liste non exhaustive). Relisez-les, ouvrez le dossier en mode restreint
+  dans VS Code et ne lancez pas sous Windows des scripts écrits par l'IA sans les relire ;
+- accéder à Internet (nécessaire pour l'API et l'installation d'outils), donc exfiltrer le
+  contenu du dossier et les clés transmises à la sandbox ; ainsi que les services
+  qui écoutent sur votre poste (`host.containers.internal` désigne Windows avec Podman
+  machine) : n'exposez pas de service sans authentification sur `localhost` ;
+- lire tout le fichier `settings.json` recopié : pointez `Settings` vers un fichier dédié qui
+  ne contient que la gateway / la clé de la sandbox (pas de jetons d'autres services) ;
+- empoisonner la sandbox elle-même (outils installés, historique dans le volume d'état),
+  pour les sessions suivantes sur ce dossier : `-Reset` en cas de doute.
 
 ## Ajouter un client IA
 
