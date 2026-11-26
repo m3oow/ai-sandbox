@@ -35,4 +35,16 @@
         claude = '%USERPROFILE%\.claude\settings.json'
         # gemini = '%USERPROFILE%\.gemini\settings.json'
     }
+    # Sécurité : TOUT le fichier est lisible par l'IA de la sandbox (et par un contenu
+    # malveillant qui la manipulerait). Il ne doit contenir que ce dont la sandbox a
+    # besoin : pas de jetons d'autres services dans « env », pas de hooks Windows.
+
+    # Après chaque session, signale les fichiers créés ou modifiés dans le dossier
+    # que Windows ou vos outils peuvent exécuter hors sandbox (.git/config, hooks git,
+    # .vscode/tasks.json, .claude/settings.json, .mcp.json, raccourcis, desktop.ini...).
+    AuditHostFiles = $true
+
+    # Refus des machines Podman en mode rootful (root dans la sandbox = root de la
+    # machine Podman, qui a accès à vos fichiers Windows). $true pour passer outre.
+    AllowRootful = $false
 }

@@ -37,8 +37,30 @@ param(
     [switch]$List,      # liste toutes les sandboxes
     [switch]$Rebuild,   # reconstruit les images (met a jour les clients IA)
     [switch]$Update,    # recree les sandboxes sur la derniere image (historique conserve)
-    [switch]$StopAll    # arrete toutes les sandboxes en cours
+    [switch]$StopAll,   # arrete toutes les sandboxes en cours
+    [switch]$NewWindow  # usage interne (menu contextuel) : relance le script dans un terminal
 )
+
+# Lancement depuis le menu contextuel avec Windows Terminal : le registre ne passe
+# jamais le dossier cliqué (%V) à wt.exe, qui découpe sa ligne de commande sur « ; »
+# MÊME entre guillemets (un dossier nommé « x; nt calc » exécuterait « calc » sur
+# l'hôte). Ce lanceur (fenêtre masquée) rouvre le script dans un terminal visible,
+# et n'utilise pas wt.exe si le chemin contient un « ; ».
+if ($NewWindow) {
+    $p = if ($Path) { $Path } else { (Get-Location).ProviderPath }
+    if ($p.EndsWith('\')) { $p += '.' }   # sinon « C:\" » est lu comme un guillemet échappé
+    $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Client `"$Client`""
+    if ($Shell) { $argLine += ' -Shell' }
+    if ($Yolo)  { $argLine += ' -Yolo' }
+    $argLine += " -Path `"$p`""
+    $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
+    if ($wt -and -not $argLine.Contains(';')) {
+        Start-Process -FilePath $wt.Source -ArgumentList "-w new powershell.exe $argLine"
+    } else {
+        Start-Process -FilePath 'powershell.exe' -ArgumentList $argLine
+    }
+    exit 0
+}
 
 $Root    = $PSScriptRoot
 $Clients = Import-PowerShellDataFile (Join-Path $Root 'clients.psd1')
@@ -75,8 +97,172 @@ function Assert-Podman {
     }
 }
 
+function Test-Rootless {
+    if ($null -eq $script:Rootless) {
+        $script:Rootless = "$(podman info --format '{{.Host.Security.Rootless}}')".Trim()
+    }
+    return ($script:Rootless -eq 'true')
+}
+
+# En mode rootful, root dans la sandbox (sudo sans mot de passe) est root de la
+# machine Podman, qui a accès à vos fichiers Windows : la moindre faille du noyau
+# ou de l'isolation devient une sortie de la sandbox. Refusé sauf choix explicite.
+function Assert-Rootless {
+    if ((Test-Rootless) -or $Config.AllowRootful) { return }
+    Exit-WithMessage ("Refusé : la machine Podman est en mode rootful.`n" +
+        "Root dans la sandbox serait root de la machine Podman, qui a accès à vos fichiers Windows.`n" +
+        "Passez en rootless : podman machine stop ; podman machine set --rootful=false ; podman machine start`n" +
+        "(ou, en connaissance de cause : AllowRootful = `$true dans $configFile)")
+}
+
+# Vrai si $Child est $Parent ou se trouve dessous
+function Test-IsUnder([string]$Child, [string]$Parent) {
+    $c = $Child.TrimEnd('\'); $p = $Parent.TrimEnd('\')
+    return ($c -ieq $p) -or $c.StartsWith("$p\", [StringComparison]::OrdinalIgnoreCase)
+}
+
+# Chemin réel : suit les jonctions et liens symboliques de chaque composant.
+# Podman monte la CIBLE d'un lien : sans cela, C:\Projets\x -> C:\Users\moi\AppData
+# contournerait les garde-fous. Lève une exception si un composant est illisible.
+function Resolve-RealPath([string]$P) {
+    $P = [IO.Path]::GetFullPath($P).TrimEnd('\')
+    for ($hop = 0; $hop -lt 40; $hop++) {
+        if ($P.StartsWith('\\')) { return $P }
+        $parts = $P.Split('\')
+        $cur = $parts[0] + '\'
+        $next = $null
+        for ($i = 1; $i -lt $parts.Count; $i++) {
+            if ($parts[$i] -eq '') { continue }
+            $item = Get-Item -LiteralPath (Join-Path $cur $parts[$i]) -Force -ErrorAction Stop
+            if ($item.LinkType -in 'Junction', 'SymbolicLink') {
+                $target = "$(@($item.Target)[0])"
+                if (-not $target) { throw "Lien illisible : $($item.FullName)" }
+                if (-not [IO.Path]::IsPathRooted($target)) { $target = Join-Path $cur $target }
+                $rest = [string]::Join('\', $parts, $i + 1, $parts.Count - $i - 1)
+                $next = if ($rest) { Join-Path $target $rest } else { $target }
+                break
+            }
+            $cur = $item.FullName
+        }
+        if ($null -eq $next) { return $P }
+        if ($next.StartsWith('\\')) { return $next }
+        $P = [IO.Path]::GetFullPath($next).TrimEnd('\')
+    }
+    throw "Trop de liens imbriqués : $P"
+}
+
+# Renvoie la raison du refus si $P (chemin réel) ne doit pas être monté, sinon $null.
+# Un dossier monté est accessible en écriture à l'IA : il ne doit contenir ni
+# fichiers exécutés automatiquement par Windows (Démarrage, profils PowerShell,
+# scripts d'ai-sandbox...), ni identifiants (~\.ssh, ~\.aws...).
+function Get-SandboxPathError([string]$P) {
+    if ($P.StartsWith('\\')) {
+        return "Chemin réseau ou \\wsl$ non pris en charge : $P`nUtilisez un dossier sur un disque local (C:\, D:\...)."
+    }
+    if ($P -match '^[A-Za-z]:$') { return "Refusé : '$P\' est un disque entier, trop large pour une sandbox." }
+    if ($P -notmatch '^[A-Za-z]:\\') { return "Chemin non pris en charge : $P" }
+    try {
+        if ([IO.DriveInfo]::new($P.Substring(0, 2)).DriveType -eq 'Network') {
+            return "Lecteur réseau non pris en charge : $P`nUtilisez un dossier sur un disque local."
+        }
+    } catch { }
+
+    # Trop larges : refusés ainsi que leurs dossiers parents (C:\Users...)
+    $broad = @($env:USERPROFILE, $env:PUBLIC, $env:OneDrive)
+    if ($env:USERPROFILE) { $broad += Split-Path $env:USERPROFILE -Parent }
+    foreach ($s in ($broad | Where-Object { $_ })) {
+        if (Test-IsUnder $s $P) { return "Refusé : '$P' est trop large pour une sandbox (contient $s)." }
+    }
+
+    # Sensibles : refusés, ainsi que leurs parents et leurs sous-dossiers
+    $sensitive = @($env:SystemRoot, $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramW6432,
+                   $env:ProgramData, $env:LOCALAPPDATA, $env:APPDATA, $Root)
+    if ($env:LOCALAPPDATA) { $sensitive += Split-Path $env:LOCALAPPDATA -Parent }   # AppData (dont Démarrage)
+    $docs = [Environment]::GetFolderPath('MyDocuments')
+    if ($docs) { $sensitive += @((Join-Path $docs 'WindowsPowerShell'), (Join-Path $docs 'PowerShell')) }
+    if ($env:USERPROFILE) {
+        foreach ($d in '.ssh', '.gnupg', '.aws', '.azure', '.kube', '.docker', '.config',
+                       '.claude', '.gemini', '.vscode') {
+            $sensitive += Join-Path $env:USERPROFILE $d
+        }
+    }
+    foreach ($s in ($sensitive | Where-Object { $_ })) {
+        if ((Test-IsUnder $s $P) -or (Test-IsUnder $P $s)) {
+            return "Refusé : '$P' contient ou se trouve dans un dossier sensible ($s)."
+        }
+    }
+    return $null
+}
+
+# ------------------------------------------- fichiers interprétés par l'hôte
+# Ce que l'IA écrit dans le dossier monté peut être EXÉCUTÉ plus tard par Windows
+# ou vos outils, hors sandbox : .git/config (core.fsmonitor, hooksPath...) et hooks
+# exécutés par git / l'extension git de VS Code, tâches VS Code, réglages Claude
+# Code (hooks, serveurs MCP), raccourcis et desktop.ini (icône sur un partage
+# réseau = fuite du hash NTLM)... Ces fichiers sont relevés avant et après la
+# session, et toute création ou modification est signalée.
+
+$HostSensitiveSkipDirs = @('node_modules', '.venv', 'venv', '__pycache__', '.tox', '.gradle', '.m2', '.cache')
+
+function Test-HostSensitiveFile([IO.FileInfo]$F) {
+    if ($F.Name -in '.git', '.mcp.json', '.envrc', '.npmrc', 'desktop.ini') { return $true }
+    if ($F.Extension -in '.lnk', '.url', '.scf', '.library-ms', '.searchconnector-ms', '.code-workspace') { return $true }
+    $parent = $F.Directory.Name
+    if ($parent -eq '.vscode' -and $F.Name -in 'tasks.json', 'settings.json', 'launch.json') { return $true }
+    if ($parent -in '.claude', '.gemini' -and $F.Name -like 'settings*.json') { return $true }
+    return $false
+}
+
+function Get-FileStamp([IO.FileInfo]$F) { "$($F.LastWriteTimeUtc.Ticks)/$($F.Length)" }
+
+function Add-HostSensitiveFiles([string]$Dir, [int]$Depth, [hashtable]$Found, [hashtable]$Budget) {
+    try { $entries = ([IO.DirectoryInfo]$Dir).GetFileSystemInfos() } catch { return }
+    foreach ($e in $entries) {
+        $Budget.Left--
+        if ($Budget.Left -lt 0) { $Found['(analyse partielle : dossier trop volumineux)'] = ''; return }
+        $isDir = [bool]($e.Attributes -band [IO.FileAttributes]::Directory)
+        if ([bool]($e.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
+            $e.LinkType -in 'Junction', 'SymbolicLink') {
+            $Found[$e.FullName] = "lien -> $(@($e.Target)[0])"   # non suivi
+            continue
+        }
+        if (-not $isDir) {
+            if (Test-HostSensitiveFile $e) { $Found[$e.FullName] = Get-FileStamp $e }
+            continue
+        }
+        if ($e.Name -ieq '.git') {
+            foreach ($n in 'config', 'config.worktree', 'commondir') {
+                $f = [IO.FileInfo](Join-Path $e.FullName $n)
+                if ($f.Exists) { $Found[$f.FullName] = Get-FileStamp $f }
+            }
+            $hooks = [IO.DirectoryInfo](Join-Path $e.FullName 'hooks')
+            if ($hooks.Exists) {
+                foreach ($h in $hooks.GetFiles()) {
+                    if ($h.Extension -ne '.sample') { $Found[$h.FullName] = Get-FileStamp $h }
+                }
+            }
+            continue
+        }
+        if ($Depth -lt 12 -and $HostSensitiveSkipDirs -notcontains $e.Name) {
+            Add-HostSensitiveFiles $e.FullName ($Depth + 1) $Found $Budget
+        }
+    }
+}
+
+function Get-HostSensitiveFiles([string]$Dir) {
+    $found = @{}
+    Add-HostSensitiveFiles $Dir 0 $found @{ Left = 200000 }
+    return $found
+}
+
 function Build-Images([string[]]$Names) {
     $imgDir = Join-Path $Root 'images'
+
+    foreach ($u in @($NpmRegistry, $PipIndexUrl)) {
+        if ($u -and $u -notmatch '^https://') {
+            Write-Host "   Attention : $u n'est pas en HTTPS (paquets modifiables en transit)." -ForegroundColor Yellow
+        }
+    }
 
     Write-Host "`n== Image de base ($BaseImage) ==" -ForegroundColor Cyan
     Write-Host "   Registre npm : $(if ($NpmRegistry) { $NpmRegistry } else { 'public (registry.npmjs.org)' })" -ForegroundColor DarkGray
@@ -179,10 +365,7 @@ function New-Sandbox {
         $runArgs += @('-v', "${vol}:$($clientCfg.StateDir)")
     }
 
-    if ($null -eq $script:Rootless) {
-        $script:Rootless = "$(podman info --format '{{.Host.Security.Rootless}}')".Trim()
-    }
-    if ($script:Rootless -eq 'true') {
+    if (Test-Rootless) {
         # UID 1000 de la machine Podman <-> utilisateur "dev" du conteneur
         $runArgs += '--userns=keep-id:uid=1000,gid=1000'
     }
@@ -205,6 +388,7 @@ function Get-OutdatedSandboxes {
 # -Update : recrée sur la dernière image chaque sandbox qui ne l'utilise pas
 # encore. Le volume d'état est conservé ; les sessions ouvertes sont coupées.
 function Update-AllSandboxes {
+    Assert-Rootless
     $recreated = @(); $unchanged = @(); $orphans = @(); $failed = @()
 
     foreach ($c in Get-Sandboxes) {
@@ -222,6 +406,21 @@ function Update-AllSandboxes {
         # Dossier supprimé, déplacé, renommé ou disque non branché : la recréation
         # échouerait (montage impossible), on laisse la sandbox telle quelle.
         if (-not (Test-Path -LiteralPath $sbPath -PathType Container)) { $orphans += $row; continue }
+
+        # Garde-fous actuels appliqués aussi aux sandboxes existantes (créées par une
+        # version antérieure, ou dont le chemin est devenu un lien entre-temps)
+        try { $real = Resolve-RealPath $sbPath } catch { $real = $null }
+        if (-not $real) {
+            $pathError = 'chemin réel indéterminable'
+        } elseif ($real -ine $sbPath.TrimEnd('\')) {
+            $pathError = "le chemin est désormais un lien vers $real"
+        } else {
+            $pathError = Get-SandboxPathError $real
+        }
+        if ($pathError) {
+            $row.Detail = "non recréée, dossier refusé : $pathError (supprimez-la : podman rm -f $name)"
+            $failed += $row; continue
+        }
 
         $wasRunning = ("$($c.State)" -eq 'running')
         Write-Host "Recréation de $name ($sbPath)..." -ForegroundColor DarkGray
@@ -309,29 +508,17 @@ try {
 }
 $Path = $Path.TrimEnd('\')
 
-# Garde-fous : on ne monte jamais un périmètre trop large
-if ($Path.StartsWith('\\')) {
-    Exit-WithMessage "Chemin réseau ou \\wsl$ non pris en charge : $Path`nUtilisez un dossier sur un disque local (C:\, D:\...)."
+# Garde-fous : on ne monte jamais un périmètre trop large ou sensible. Le contrôle
+# porte sur le chemin réel (liens résolus), qui est aussi celui monté.
+if (-not $Path.StartsWith('\\') -and $Path -notmatch '^[A-Za-z]:$') {
+    try {
+        $Path = Resolve-RealPath $Path
+    } catch {
+        Exit-WithMessage "Impossible de déterminer le chemin réel de $Path : $($_.Exception.Message)"
+    }
 }
-if ($Path -match '^[A-Za-z]:$') {
-    Exit-WithMessage "Refusé : '$Path\' est un disque entier, trop large pour une sandbox."
-}
-$forbidden = @(
-    $env:USERPROFILE,
-    (Split-Path $env:USERPROFILE -Parent),
-    $env:SystemRoot,
-    $env:ProgramFiles,
-    ${env:ProgramFiles(x86)},
-    $env:ProgramData,
-    $env:LOCALAPPDATA,
-    $env:APPDATA
-) | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\') }
-foreach ($f in $forbidden) {
-    if ($Path -ieq $f) { Exit-WithMessage "Refusé : '$Path' est trop large pour une sandbox." }
-}
-if ($env:SystemRoot -and $Path.StartsWith($env:SystemRoot, [StringComparison]::OrdinalIgnoreCase)) {
-    Exit-WithMessage "Refusé : '$Path' est dans le dossier Windows."
-}
+$pathError = Get-SandboxPathError $Path
+if ($pathError) { Exit-WithMessage $pathError }
 
 # Nom de conteneur stable pour ce couple (client, dossier)
 $sha   = [Security.Cryptography.SHA1]::Create()
@@ -365,6 +552,8 @@ if ($Reset) {
 }
 
 # ------------------------------------------------ création / démarrage
+
+Assert-Rootless
 
 podman image exists $Image
 if ($LASTEXITCODE -ne 0) {
@@ -407,15 +596,25 @@ if ($settingsSrc -and $cfg.SettingsTarget) {
         # Fins de ligne Unix forcées, rien à installer dans l'image.
         $script  = (Get-Content -LiteralPath (Join-Path $Root 'lib\sync-settings.sh') -Raw) -replace "`r", ''
         $scriptB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script))
+        # Le contenu des réglages (clés d'API...) passe par l'environnement du processus
+        # podman.exe (« -e NOM » sans valeur : valeur reprise de l'environnement) et
+        # JAMAIS par sa ligne de commande, lisible par les autres processus et journalisée
+        # par l'audit Windows (événement 4688) ou les EDR.
+        $env:AI_SANDBOX_SETTINGS_B64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($settingsSrc))
         $syncArgs = @('exec',
             '-e', "AI_SANDBOX_SYNC_B64=$scriptB64",
-            '-e', "AI_SANDBOX_SETTINGS_B64=$([Convert]::ToBase64String([IO.File]::ReadAllBytes($settingsSrc)))",
+            '-e', 'AI_SANDBOX_SETTINGS_B64',
             '-e', "AI_SANDBOX_SETTINGS_TARGET=$($cfg.SettingsTarget)")
         if ($cfg.OnboardingFile) { $syncArgs += @('-e', "AI_SANDBOX_ONBOARDING=$($cfg.OnboardingFile)") }
         $syncArgs += @($Name, 'bash', '-c', 'echo $AI_SANDBOX_SYNC_B64 | base64 -d | bash')
 
-        & podman @syncArgs
-        if ($LASTEXITCODE -eq 0) {
+        try {
+            & podman @syncArgs
+            $syncCode = $LASTEXITCODE
+        } finally {
+            Remove-Item Env:\AI_SANDBOX_SETTINGS_B64 -ErrorAction SilentlyContinue
+        }
+        if ($syncCode -eq 0) {
             $settingsInfo = $settingsSrc
         } else {
             $settingsInfo = "ÉCHEC de la copie ($settingsSrc)"
@@ -450,10 +649,11 @@ $execArgs = @('exec', '-it', '-w', '/workspace',
               '-e', 'TERM=xterm-256color', '-e', 'COLORTERM=truecolor')
 
 # Clés d'API éventuellement définies sous Windows : transmises à la session
-# uniquement (jamais stockées dans la configuration du conteneur).
+# uniquement (jamais stockées dans la configuration du conteneur). « -e NOM » sans
+# valeur : podman reprend la valeur de son environnement, la clé n'apparaît pas
+# sur la ligne de commande.
 foreach ($k in $cfg.EnvKeys) {
-    $v = [Environment]::GetEnvironmentVariable($k)
-    if ($v) { $execArgs += @('-e', "$k=$v") }
+    if ([Environment]::GetEnvironmentVariable($k)) { $execArgs += @('-e', $k) }
 }
 
 $execArgs += $Name
@@ -464,13 +664,41 @@ if ($Shell) {
     if ($Yolo) { $execArgs += $cfg.YoloArgs }
 }
 
+$audit  = ($Config.AuditHostFiles -ne $false)
+$before = if ($audit) { Get-HostSensitiveFiles $Path }
+
 & podman @execArgs
 $code = $LASTEXITCODE
 
-# Garde la fenêtre ouverte en cas d'erreur pour pouvoir lire le message
-if ($code -ne 0 -and $code -ne 130) {
+# Dernière session fermée : la sandbox est arrêtée, pour qu'aucun processus lancé
+# par l'IA en arrière-plan ne continue sans surveillance (accès réseau, écriture
+# dans le dossier). Elle redémarre en une seconde à la session suivante.
+$execCount = "$(podman inspect --format '{{len .ExecIDs}}' $Name 2>$null)".Trim()
+if ($execCount -eq '0') { podman stop -t 2 $Name 2>$null | Out-Null }
+
+$pause = ($code -ne 0 -and $code -ne 130)
+if ($pause) {
     Write-Host ''
     Write-Host "La session s'est terminée avec le code $code." -ForegroundColor Yellow
-    Read-Host 'Appuyez sur Entrée pour fermer' | Out-Null
 }
+
+if ($audit) {
+    $after = Get-HostSensitiveFiles $Path
+    $changes = @(foreach ($k in ($after.Keys | Sort-Object)) {
+        if (-not $before.ContainsKey($k))    { "    + $k" }
+        elseif ($before[$k] -ne $after[$k]) { "    ~ $k" }
+    })
+    if ($changes.Count -gt 0) {
+        Write-Host ''
+        Write-Host 'Attention : la session a créé (+) ou modifié (~) des fichiers que Windows ou vos outils' -ForegroundColor Yellow
+        Write-Host "peuvent exécuter HORS de la sandbox (git, VS Code, Claude Code, Explorateur) :" -ForegroundColor Yellow
+        $changes | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
+        Write-Host ("Relisez-les avant d'ouvrir ce dossier avec git, un IDE ou un agent IA sous Windows " +
+                    "(ex. core.fsmonitor, core.hooksPath, hooks, tâches, serveurs MCP).") -ForegroundColor Yellow
+        $pause = $true
+    }
+}
+
+# Garde la fenêtre ouverte pour pouvoir lire les messages
+if ($pause) { Read-Host 'Appuyez sur Entrée pour fermer' | Out-Null }
 exit $code
