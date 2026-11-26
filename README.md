@@ -149,6 +149,12 @@ foreach ($b in 'HKCU:\Software\Classes\Directory\shell\AISandbox',
     New-ItemProperty -LiteralPath $k -Name MUIVerb -Value 'Mettre à jour les sandboxes' -Force | Out-Null
     Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
         -Value "wt.exe -w new powershell.exe -NoProfile -NoExit -File `"$ps1`" -Update"
+
+    $k = "$b\shell\07-resetall"
+    New-Item -Path "$k\command" -Force | Out-Null
+    New-ItemProperty -LiteralPath $k -Name MUIVerb -Value 'Tout réinitialiser…' -Force | Out-Null
+    Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
+        -Value "wt.exe -w new powershell.exe -NoProfile -NoExit -File `"$ps1`" -ResetAll"
 }
 ```
 
@@ -163,6 +169,7 @@ foreach ($b in 'HKCU:\Software\Classes\Directory\shell\AISandbox',
 | Claude (shell) / Gemini (shell) | Ouvre un `bash` dans la sandbox du dossier, sans lancer l'agent |
 | Reconstruire les images | `ai-sandbox.ps1 -Rebuild` : reconstruit les images et met à jour Claude Code et Gemini CLI, sans toucher aux sandboxes existantes. La fenêtre reste ouverte pour lire le résultat |
 | Mettre à jour les sandboxes | `ai-sandbox.ps1 -Update` : recrée toutes les sandboxes sur la dernière image en conservant l'historique de leur agent IA. La fenêtre reste ouverte pour lire le bilan |
+| Tout réinitialiser… | `ai-sandbox.ps1 -ResetAll` : après une confirmation unique, supprime **toutes** les sandboxes, **tous** leurs volumes (historique des agents IA compris) et les anciennes images ai-sandbox. Les images `:latest` et vos dossiers sont conservés |
 
 **Authentification** : le plus simple est un `settings.json` contenant votre clé ou votre
 gateway (voir « Réglages du client IA »). Vous pouvez aussi définir `ANTHROPIC_API_KEY` ou
@@ -181,6 +188,8 @@ $s = "$env:LOCALAPPDATA\ai-sandbox\ai-sandbox.ps1"
 & $s -Reset -Path C:\Projets\demo           # supprime la sandbox et son historique (fichiers intacts)
 & $s -Rebuild                               # met à jour les images et les clients IA
 & $s -Update                                # recrée les sandboxes sur la dernière image
+& $s -ResetAll                              # supprime toutes les sandboxes, leurs volumes et les anciennes images (confirmation)
+& $s -ResetAll -Force                       # idem, sans confirmation
 & $s -StopAll                               # arrête toutes les sandboxes
 ```
 
@@ -306,6 +315,7 @@ de `Windows`, `Program Files`, `ProgramData`, `AppData`, et des chemins réseau.
 | Échec `npm install` des clients IA | Registre npm injoignable : renseigner `NpmRegistry` dans `config.psd1`, puis `-Rebuild` |
 | Échec `pip install` pendant le build de l'image de base | Index pip injoignable ou paquet absent du miroir : renseigner `PipIndexUrl` dans `config.psd1`, puis `-Rebuild` |
 | Mettre à jour Claude Code / Gemini CLI | « Reconstruire les images » (`-Rebuild`), puis « Mettre à jour les sandboxes » (`-Update`) |
+| Repartir de zéro (toutes les sandboxes, historiques et anciennes images) | « Tout réinitialiser… » (`-ResetAll`) ; les images `:latest` sont conservées. Entrée absente du menu après une mise à jour d'ai-sandbox : relancer `install.ps1 -NoBuild` |
 | Bilan de la mise à jour : « Ignorées, dossier introuvable » | Disque non branché : rebrancher puis relancer la mise à jour. Dossier supprimé ou déplacé : `podman rm -f <nom>` puis `podman volume rm <nom>-state` |
 
 ## Désinstallation

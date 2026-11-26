@@ -110,9 +110,9 @@ if (-not $NoBuild) {
 $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
 
 function New-MenuCommand([string]$ClientName, [string]$Mode) {
-    if ($Mode -in 'rebuild', 'update') {
+    if ($Mode -in 'rebuild', 'update', 'resetall') {
         # -NoExit : la fenêtre reste ouverte pour lire le résultat (construction, bilan)
-        $switch = if ($Mode -eq 'rebuild') { '-Rebuild' } else { '-Update' }
+        $switch = switch ($Mode) { 'rebuild' { '-Rebuild' } 'update' { '-Update' } 'resetall' { '-ResetAll' } }
         $cmd = "powershell.exe -NoProfile -NoExit -ExecutionPolicy Bypass -File `"$ps1`" $switch"
         if ($wt) { return "wt.exe -w new $cmd" }
         return $cmd
@@ -162,11 +162,13 @@ foreach ($b in $bases) {
 
     # Dernières entrées : reconstruction des images (met à jour les clients IA),
     # puis mise à jour des sandboxes existantes sur ces images (séparée, pour
-    # pouvoir tester la nouvelle image avant de l'appliquer partout)
+    # pouvoir tester la nouvelle image avant de l'appliquer partout), puis
+    # réinitialisation complète (avec confirmation dans la fenêtre)
     $first = $true
     foreach ($entry in @(
         @{ Mode = 'rebuild'; Text = 'Reconstruire les images' },
-        @{ Mode = 'update';  Text = 'Mettre à jour les sandboxes' }
+        @{ Mode = 'update';  Text = 'Mettre à jour les sandboxes' },
+        @{ Mode = 'resetall'; Text = 'Tout réinitialiser…' }
     )) {
         $i++
         $key = "$b\shell\{0:D2}-{1}" -f $i, $entry.Mode
