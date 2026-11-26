@@ -99,7 +99,7 @@ Vérification : `podman images` doit lister :
 
 Le menu n'est qu'un ensemble de clés sous `HKCU` (HKEY_CURRENT_USER) dans la base de registre Windows. Pour chaque entrée, créez une clé dont la sous-clé `command` contient la commande à lancer.
 
-Pour créer les entrées de base et les entrées shell (accès au shell du conteneur Claude ou Gemini) :
+Pour créer les entrées de base, les entrées shell (accès au shell du conteneur Claude ou Gemini), puis les entrées de maintenance (reconstruction des images et mise à jour des sandboxes) :
 
 ```powershell
 $ps1  = "$env:LOCALAPPDATA\ai-sandbox\ai-sandbox.ps1"
@@ -135,6 +135,20 @@ foreach ($b in 'HKCU:\Software\Classes\Directory\shell\AISandbox',
     New-ItemProperty -LiteralPath $k -Name MUIVerb -Value 'Gemini (shell)' -Force | Out-Null
     Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
         -Value "wt.exe -w new powershell.exe -NoProfile -File `"$ps1`" -Client gemini -Shell -Path `"%V`""
+
+    # Maintenance : -NoExit garde la fenêtre ouverte pour lire le résultat
+    $k = "$b\shell\05-rebuild"
+    New-Item -Path "$k\command" -Force | Out-Null
+    New-ItemProperty -LiteralPath $k -Name MUIVerb      -Value 'Reconstruire les images' -Force | Out-Null
+    New-ItemProperty -LiteralPath $k -Name CommandFlags -Value 0x20 -PropertyType DWord -Force | Out-Null   # séparateur
+    Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
+        -Value "wt.exe -w new powershell.exe -NoProfile -NoExit -File `"$ps1`" -Rebuild"
+
+    $k = "$b\shell\06-update"
+    New-Item -Path "$k\command" -Force | Out-Null
+    New-ItemProperty -LiteralPath $k -Name MUIVerb -Value 'Mettre à jour les sandboxes' -Force | Out-Null
+    Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
+        -Value "wt.exe -w new powershell.exe -NoProfile -NoExit -File `"$ps1`" -Update"
 }
 ```
 
