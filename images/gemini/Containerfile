@@ -13,7 +13,8 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi 
 # Pas de navigateur dans le conteneur : connexion Google par URL + code à coller
 ENV NO_BROWSER=true
 
-# Configuration de Gemini (réglages, historique) propre à chaque conteneur.
+# Configuration de Gemini (réglages, historique) propre à chaque sandbox :
+# ai-sandbox.ps1 y monte un volume dédié, conservé lors d'un -Update (StateDir).
 # settings.json peut y être recopié depuis Windows (config.psd1 > Settings).
 RUN mkdir -p /home/dev/.gemini
 

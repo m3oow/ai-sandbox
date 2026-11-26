@@ -110,9 +110,10 @@ if (-not $NoBuild) {
 $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
 
 function New-MenuCommand([string]$ClientName, [string]$Mode) {
-    if ($Mode -eq 'rebuild') {
-        # -NoExit : la fenêtre reste ouverte pour lire le résultat de la construction
-        $cmd = "powershell.exe -NoProfile -NoExit -ExecutionPolicy Bypass -File `"$ps1`" -Rebuild"
+    if ($Mode -in 'rebuild', 'update') {
+        # -NoExit : la fenêtre reste ouverte pour lire le résultat (construction, bilan)
+        $switch = if ($Mode -eq 'rebuild') { '-Rebuild' } else { '-Update' }
+        $cmd = "powershell.exe -NoProfile -NoExit -ExecutionPolicy Bypass -File `"$ps1`" $switch"
         if ($wt) { return "wt.exe -w new $cmd" }
         return $cmd
     }
@@ -159,13 +160,24 @@ foreach ($b in $bases) {
         }
     }
 
-    # Dernière entrée : reconstruction des images (met à jour les clients IA)
-    $i++
-    $key = "$b\shell\{0:D2}-rebuild" -f $i
-    New-Item -Path "$key\command" -Force | Out-Null
-    New-ItemProperty -LiteralPath $key -Name 'MUIVerb'       -Value 'Reconstruire les images' -PropertyType String -Force | Out-Null
-    New-ItemProperty -LiteralPath $key -Name 'CommandFlags' -Value 0x20 -PropertyType DWord -Force | Out-Null
-    Set-ItemProperty -LiteralPath "$key\command" -Name '(default)' -Value (New-MenuCommand '' 'rebuild')
+    # Dernières entrées : reconstruction des images (met à jour les clients IA),
+    # puis mise à jour des sandboxes existantes sur ces images (séparée, pour
+    # pouvoir tester la nouvelle image avant de l'appliquer partout)
+    $first = $true
+    foreach ($entry in @(
+        @{ Mode = 'rebuild'; Text = 'Reconstruire les images' },
+        @{ Mode = 'update';  Text = 'Mettre à jour les sandboxes' }
+    )) {
+        $i++
+        $key = "$b\shell\{0:D2}-{1}" -f $i, $entry.Mode
+        New-Item -Path "$key\command" -Force | Out-Null
+        New-ItemProperty -LiteralPath $key -Name 'MUIVerb' -Value $entry.Text -PropertyType String -Force | Out-Null
+        if ($first) {
+            New-ItemProperty -LiteralPath $key -Name 'CommandFlags' -Value 0x20 -PropertyType DWord -Force | Out-Null
+            $first = $false
+        }
+        Set-ItemProperty -LiteralPath "$key\command" -Name '(default)' -Value (New-MenuCommand '' $entry.Mode)
+    }
 }
 
 Write-Host ''

@@ -99,7 +99,7 @@ Vérification : `podman images` doit lister :
 
 Le menu n'est qu'un ensemble de clés sous `HKCU` (HKEY_CURRENT_USER) dans la base de registre Windows. Pour chaque entrée, créez une clé dont la sous-clé `command` contient la commande à lancer.
 
-Pour créer les entrées de base et les entrées shell (accès au shell du conteneur Claude ou Gemini) :
+Pour créer les entrées de base, les entrées shell (accès au shell du conteneur Claude ou Gemini), puis les entrées de maintenance (reconstruction des images et mise à jour des sandboxes) :
 
 ```powershell
 $ps1  = "$env:LOCALAPPDATA\ai-sandbox\ai-sandbox.ps1"
@@ -135,6 +135,20 @@ foreach ($b in 'HKCU:\Software\Classes\Directory\shell\AISandbox',
     New-ItemProperty -LiteralPath $k -Name MUIVerb -Value 'Gemini (shell)' -Force | Out-Null
     Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
         -Value "wt.exe -w new powershell.exe -NoProfile -File `"$ps1`" -Client gemini -Shell -Path `"%V`""
+
+    # Maintenance : -NoExit garde la fenêtre ouverte pour lire le résultat
+    $k = "$b\shell\05-rebuild"
+    New-Item -Path "$k\command" -Force | Out-Null
+    New-ItemProperty -LiteralPath $k -Name MUIVerb      -Value 'Reconstruire les images' -Force | Out-Null
+    New-ItemProperty -LiteralPath $k -Name CommandFlags -Value 0x20 -PropertyType DWord -Force | Out-Null   # séparateur
+    Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
+        -Value "wt.exe -w new powershell.exe -NoProfile -NoExit -File `"$ps1`" -Rebuild"
+
+    $k = "$b\shell\06-update"
+    New-Item -Path "$k\command" -Force | Out-Null
+    New-ItemProperty -LiteralPath $k -Name MUIVerb -Value 'Mettre à jour les sandboxes' -Force | Out-Null
+    Set-ItemProperty -LiteralPath "$k\command" -Name '(default)' `
+        -Value "wt.exe -w new powershell.exe -NoProfile -NoExit -File `"$ps1`" -Update"
 }
 ```
 
@@ -147,7 +161,8 @@ foreach ($b in 'HKCU:\Software\Classes\Directory\shell\AISandbox',
 |---|---|
 | Claude / Gemini | Ouvre directement l'agent IA dans la sandbox du dossier |
 | Claude (shell) / Gemini (shell) | Ouvre un `bash` dans la sandbox du dossier, sans lancer l'agent |
-| Reconstruire les images | `ai-sandbox.ps1 -Rebuild` : reconstruit les images et met à jour Claude Code et Gemini CLI. La fenêtre reste ouverte pour lire le résultat |
+| Reconstruire les images | `ai-sandbox.ps1 -Rebuild` : reconstruit les images et met à jour Claude Code et Gemini CLI, sans toucher aux sandboxes existantes. La fenêtre reste ouverte pour lire le résultat |
+| Mettre à jour les sandboxes | `ai-sandbox.ps1 -Update` : recrée toutes les sandboxes sur la dernière image en conservant l'historique de leur agent IA. La fenêtre reste ouverte pour lire le bilan |
 
 **Authentification** : le plus simple est un `settings.json` contenant votre clé ou votre
 gateway (voir « Réglages du client IA »). Vous pouvez aussi définir `ANTHROPIC_API_KEY` ou
@@ -163,8 +178,9 @@ $s = "$env:LOCALAPPDATA\ai-sandbox\ai-sandbox.ps1"
 & $s -Client gemini -Yolo                   # Gemini autonome, dossier courant
 & $s -Shell                                 # bash dans la sandbox du dossier courant
 & $s -List                                  # toutes les sandboxes et leur dossier
-& $s -Reset -Path C:\Projets\demo           # recrée la sandbox à neuf (fichiers intacts)
+& $s -Reset -Path C:\Projets\demo           # supprime la sandbox et son historique (fichiers intacts)
 & $s -Rebuild                               # met à jour les images et les clients IA
+& $s -Update                                # recrée les sandboxes sur la dernière image
 & $s -StopAll                               # arrête toutes les sandboxes
 ```
 
@@ -172,10 +188,32 @@ $s = "$env:LOCALAPPDATA\ai-sandbox\ai-sandbox.ps1"
 
 - **Un conteneur par couple (client, dossier)**, nommé `ai-<client>-<hash du chemin>`.
   Il reste en place entre les sessions : les outils installés par l'IA
-  (`sudo apt install …`, `pip install --user …`, `npm i -g …`) restent disponibles pour ce projet.
-- **Configuration du client propre à chaque conteneur** (historique, sessions, état) : rien
-  n'est partagé entre projets, l'IA d'un projet ne peut pas lire les conversations d'un autre.
-  `-Reset` efface aussi cet historique.
+  (`sudo dnf install …`, `pip install --user …`, `npm i -g …`) restent disponibles pour ce
+  projet, jusqu'à la prochaine mise à jour de la sandbox (voir ci-dessous).
+- **Historique de l'agent propre à chaque sandbox** (conversations, sessions, connexion, état),
+  dans un volume Podman dédié `ai-<client>-<hash du chemin>-state` : rien n'est partagé entre
+  projets, l'IA d'un projet ne peut pas lire les conversations d'un autre.
+  `-Reset` supprime la sandbox **et** cet historique.
+- **Mise à jour en deux temps** :
+  1. « Reconstruire les images » (`-Rebuild`) construit les nouvelles images sans toucher aux
+     sandboxes existantes. Une nouvelle sandbox (sur un dossier de test, par exemple) utilise
+     déjà la nouvelle image : vous pouvez la tester avant de l'appliquer partout. Une sandbox
+     existante restée sur l'ancienne image l'indique au lancement.
+  2. « Mettre à jour les sandboxes » (`-Update`) supprime puis recrée chaque sandbox qui
+     n'utilise pas la dernière image, dans le même état (démarrée ou arrêtée), en réutilisant
+     son volume d'historique : `claude --continue` / `--resume` retrouve les conversations.
+     Les sessions ouvertes à ce moment sont coupées, et les outils installés par l'IA dans la
+     sandbox (`dnf`, `pip --user`, `npm -g`) sont perdus. Les anciennes images ai-sandbox
+     sont ensuite supprimées.
+- **Toutes les sandboxes sont recréées après chaque rebuild**, même sans nouvelle version de
+  Claude Code, de Gemini CLI ou de l'image de base : les images clients sont reconstruites
+  à neuf à chaque fois (pour récupérer la dernière version du client), ce qui produit
+  toujours une nouvelle image.
+- **Sandbox orpheline** : si le dossier d'une sandbox est introuvable au moment de la mise à
+  jour (supprimé, déplacé, renommé, ou disque non branché), elle est laissée telle quelle et
+  le bilan l'indique. Disque rebranché : relancez la mise à jour. Dossier supprimé ou
+  déplacé : `-Reset` n'est plus possible, supprimez-la avec les commandes affichées par le
+  bilan (`podman rm -f <nom>` puis `podman volume rm <nom>-state`).
 - **Utilisateur `dev` (UID 1000)** avec sudo sans mot de passe, mappé sur votre utilisateur
   de la machine Podman (`--userns=keep-id`) : les fichiers créés vous appartiennent.
 - **Image de base** : Red Hat UBI 10 (`registry.access.redhat.com/ubi10/ubi:latest` par défaut)
@@ -215,6 +253,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -BaseImage registry.mon-e
 
 # ou après coup : éditer %LOCALAPPDATA%\ai-sandbox\config.psd1, puis
 & "$env:LOCALAPPDATA\ai-sandbox\ai-sandbox.ps1" -Rebuild
+& "$env:LOCALAPPDATA\ai-sandbox\ai-sandbox.ps1" -Update    # une fois la nouvelle image validée
 ```
 
 - Registre authentifié : `podman login registry.mon-entreprise.fr` une fois au préalable.
@@ -232,7 +271,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -BaseImage registry.mon-e
   qui fournissent au minimum `nodejs` (≥ 20), `npm`, `python3`, `git-core`, `sudo`, `gcc`, `make`.
   Une image interne dont les `.repo` pointent vers vos miroirs convient telle quelle.
 - La réinstallation conserve votre `config.psd1` existant.
-- Les sandboxes déjà créées gardent l'ancienne image : `-Reset` pour les recréer.
+- Les sandboxes existantes passent sur la nouvelle image avec `-Update` (historique conservé).
 
 ## Modèle de sécurité
 
@@ -266,7 +305,8 @@ de `Windows`, `Program Files`, `ProgramData`, `AppData`, et des chemins réseau.
 | Échec du build de l'image de base | Vérifier `BaseImage`, `podman login`, et que les dépôts dnf de l'image fournissent les paquets requis |
 | Échec `npm install` des clients IA | Registre npm injoignable : renseigner `NpmRegistry` dans `config.psd1`, puis `-Rebuild` |
 | Échec `pip install` pendant le build de l'image de base | Index pip injoignable ou paquet absent du miroir : renseigner `PipIndexUrl` dans `config.psd1`, puis `-Rebuild` |
-| Mettre à jour Claude Code / Gemini CLI | Entrée de menu « Reconstruire les images » (ou `-Rebuild`), puis `-Reset` sur les sandboxes concernées |
+| Mettre à jour Claude Code / Gemini CLI | « Reconstruire les images » (`-Rebuild`), puis « Mettre à jour les sandboxes » (`-Update`) |
+| Bilan de la mise à jour : « Ignorées, dossier introuvable » | Disque non branché : rebrancher puis relancer la mise à jour. Dossier supprimé ou déplacé : `podman rm -f <nom>` puis `podman volume rm <nom>-state` |
 
 ## Désinstallation
 
@@ -282,8 +322,9 @@ powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\ai-sandbox\uninstall
 Remove-Item -Recurse -Force 'HKCU:\Software\Classes\Directory\shell\AISandbox',
                             'HKCU:\Software\Classes\Directory\Background\shell\AISandbox'
 
-# sandboxes, images, fichiers (équivalent de -Purge)
+# sandboxes, historiques des agents IA, images, fichiers (équivalent de -Purge)
 podman ps -aq --filter label=ai-sandbox.path | ForEach-Object { podman rm -f $_ }
+podman volume ls -q --filter label=ai-sandbox.path | ForEach-Object { podman volume rm -f $_ }
 podman rmi -f ai-sandbox-claude ai-sandbox-gemini ai-sandbox-base
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\ai-sandbox"
 ```

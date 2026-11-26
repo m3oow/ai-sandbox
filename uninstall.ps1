@@ -4,7 +4,8 @@
 
 .DESCRIPTION
     Par défaut : retire seulement le menu contextuel.
-    -Purge : supprime aussi les sandboxes, les images et le dossier d'installation.
+    -Purge : supprime aussi les sandboxes (et l'historique de leur agent IA),
+             les images et le dossier d'installation.
              Les volumes ai-sandbox-* laissés par d'anciennes versions sont
              supprimés seulement après confirmation.
     Vos dossiers de travail ne sont jamais touchés.
@@ -30,6 +31,11 @@ if ($Purge -and (Get-Command podman -ErrorAction SilentlyContinue)) {
     $ids = podman ps -aq --filter label=ai-sandbox.path
     foreach ($id in $ids) { podman rm -f $id | Out-Null }
     Write-Host "$(@($ids).Count) sandbox(es) supprimée(s)."
+
+    # Volumes d'état des sandboxes (historique des agents IA)
+    $stateVols = podman volume ls -q --filter label=ai-sandbox.path
+    foreach ($v in $stateVols) { podman volume rm -f $v | Out-Null }
+    Write-Host "$(@($stateVols).Count) historique(s) d'agent IA supprimé(s)."
 
     $images = podman images --format '{{.Repository}}:{{.Tag}}' |
               Where-Object { $_ -like 'localhost/ai-sandbox-*' }
