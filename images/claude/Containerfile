@@ -11,7 +11,7 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi 
  && claude --version
 
 # Configuration de Claude (réglages, historique, état) propre à chaque sandbox :
-# ai-sandbox.ps1 y monte un volume dédié, conservé lors d'un -Rebuild (StateDir).
+# ai-sandbox.ps1 y monte un volume dédié, conservé lors d'un -Update (StateDir).
 # settings.json y est recopié depuis Windows à chaque lancement par ai-sandbox.ps1.
 ENV CLAUDE_CONFIG_DIR=/home/dev/.claude-config
 RUN mkdir -p /home/dev/.claude-config

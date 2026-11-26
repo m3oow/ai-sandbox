@@ -5,12 +5,14 @@
 
 .DESCRIPTION
     - Un conteneur persistant par couple (client, dossier) : les outils que l'IA
-      installe (dnf, pip, npm) restent disponibles pour ce projet, jusqu'au
-      prochain -Rebuild.
+      installe (dnf, pip, npm) restent disponibles pour ce projet, jusqu'a la
+      prochaine mise a jour de la sandbox (-Update).
     - La configuration du client IA (historique, sessions, etat) est propre a
       chaque sandbox, dans un volume dedie : rien n'est partage entre projets.
-    - -Rebuild recree toutes les sandboxes sur la nouvelle image en conservant
-      ce volume, donc l'historique de l'agent IA.
+    - -Rebuild reconstruit les images sans toucher aux sandboxes (la nouvelle
+      image peut etre testee sur une nouvelle sandbox) ; -Update recree ensuite
+      toutes les sandboxes sur la derniere image en conservant ce volume, donc
+      l'historique de l'agent IA.
     - Le fichier de reglages Windows (config.psd1 > Settings) est recopie dans
       le conteneur a chaque lancement.
     - Aucun autre fichier de l'hote n'est monte.
@@ -22,6 +24,7 @@
     ai-sandbox.ps1 -List
     ai-sandbox.ps1 -Reset -Path "C:\Projets\demo"
     ai-sandbox.ps1 -Rebuild
+    ai-sandbox.ps1 -Update
     ai-sandbox.ps1 -StopAll
 #>
 [CmdletBinding()]
@@ -32,7 +35,8 @@ param(
     [switch]$Shell,     # ouvre bash au lieu du client IA
     [switch]$Reset,     # supprime la sandbox de ce dossier et son historique (pas vos fichiers)
     [switch]$List,      # liste toutes les sandboxes
-    [switch]$Rebuild,   # reconstruit les images et recree les sandboxes (historique conserve)
+    [switch]$Rebuild,   # reconstruit les images (met a jour les clients IA)
+    [switch]$Update,    # recree les sandboxes sur la derniere image (historique conserve)
     [switch]$StopAll    # arrete toutes les sandboxes en cours
 )
 
@@ -188,8 +192,18 @@ function New-Sandbox {
     return ($LASTEXITCODE -eq 0)
 }
 
-# Après un rebuild : recrée sur la nouvelle image chaque sandbox qui ne l'utilise
-# pas encore. Le volume d'état est conservé ; les sessions ouvertes sont coupées.
+# Sandboxes qui n'utilisent pas la dernière image de leur client
+function Get-OutdatedSandboxes {
+    $out = @()
+    foreach ($c in Get-Sandboxes) {
+        $clientName = $c.Labels.'ai-sandbox.client'
+        if ($Clients.ContainsKey($clientName) -and (Test-SandboxOutdated @($c.Names)[0] $clientName)) { $out += $c }
+    }
+    return $out
+}
+
+# -Update : recrée sur la dernière image chaque sandbox qui ne l'utilise pas
+# encore. Le volume d'état est conservé ; les sessions ouvertes sont coupées.
 function Update-AllSandboxes {
     $recreated = @(); $unchanged = @(); $orphans = @(); $failed = @()
 
@@ -219,7 +233,7 @@ function Update-AllSandboxes {
         if (New-Sandbox -ClientName $clientName -SandboxPath $sbPath -Name $name -NoStart:(-not $wasRunning)) {
             $recreated += $row
         } else {
-            $row.Detail = 'création impossible (historique conservé, nouvel essai au prochain lancement)'
+            $row.Detail = 'création impossible (historique conservé : relancez la mise à jour ou la sandbox)'
             $failed += $row
         }
     }
@@ -244,8 +258,8 @@ function Update-AllSandboxes {
             Write-Host "    $($r.Client)  $($r.Dossier)" -ForegroundColor Yellow
             Write-Host "      nettoyage : podman rm -f $($r.Nom) ; podman volume rm $(Get-StateVolume $r.Nom)" -ForegroundColor DarkGray
         }
-        Write-Host ("  Disque non branché : rebranchez-le puis relancez la sandbox, elle sera recréée`n" +
-                    "  sur la nouvelle image. Dossier supprimé ou déplacé : la sandbox est orpheline,`n" +
+        Write-Host ("  Disque non branché : rebranchez-le puis relancez la mise à jour.`n" +
+                    "  Dossier supprimé ou déplacé : la sandbox est orpheline,`n" +
                     "  supprimez-la avec les commandes de nettoyage ci-dessus (historique compris).") -ForegroundColor Yellow
     }
 }
@@ -266,6 +280,16 @@ if ($StopAll) {
 if ($Rebuild) {
     Build-Images @($Clients.Keys | Sort-Object)
     Write-Host "`nImages à jour." -ForegroundColor Green
+    $outdated = @(Get-OutdatedSandboxes)
+    if ($outdated.Count -gt 0) {
+        Write-Host ("$($outdated.Count) sandbox(es) existante(s) sur une ancienne image. Testez la nouvelle image " +
+                    "sur une nouvelle sandbox, puis « Mettre à jour les sandboxes » (-Update) pour l'appliquer " +
+                    "à toutes (historique conservé).") -ForegroundColor Yellow
+    }
+    return
+}
+
+if ($Update) {
     Update-AllSandboxes
     return
 }
@@ -348,27 +372,19 @@ if ($LASTEXITCODE -ne 0) {
     Build-Images @($Client)
 }
 
-$isNew     = $false
-$recreated = $false
+$outdated = $false
 podman container exists $Name
-$exists = ($LASTEXITCODE -eq 0)
-
-# Sandbox restée sur une ancienne image (recréation échouée ou dossier absent
-# lors du dernier -Rebuild) : recréation, l'historique est conservé dans le volume.
-if ($exists -and (Test-SandboxOutdated $Name $Client)) {
-    Write-Host 'Image mise à jour : recréation de la sandbox (historique conservé)...' -ForegroundColor Yellow
-    podman rm -f $Name | Out-Null
-    if ($LASTEXITCODE -ne 0) { Exit-WithMessage "Impossible de supprimer l'ancienne sandbox $Name." }
-    $exists    = $false
-    $recreated = $true
-}
-
-if (-not $exists) {
+if ($LASTEXITCODE -ne 0) {
+    # Nouvelle sandbox, ou recréation après une mise à jour qui a échoué :
+    # dans ce cas, l'historique est retrouvé dans le volume d'état.
+    podman volume exists (Get-StateVolume $Name)
+    $isNew = ($LASTEXITCODE -ne 0)
     if (-not (New-Sandbox -ClientName $Client -SandboxPath $Path -Name $Name)) {
         Exit-WithMessage "Impossible de créer la sandbox $Name."
     }
-    $isNew = -not $recreated
 } else {
+    # Pas de recréation automatique : la nouvelle image s'applique avec -Update
+    $outdated = Test-SandboxOutdated $Name $Client
     $running = "$(podman inspect --format '{{.State.Running}}' $Name)".Trim()
     if ($running -ne 'true') {
         podman start $Name | Out-Null
@@ -415,12 +431,15 @@ $mode = if ($Shell) { 'shell bash' } elseif ($Yolo) { 'AUTONOME (sans demande de
 $Host.UI.RawUI.WindowTitle = "$($cfg.Label) sandbox - $(Split-Path $Path -Leaf)"
 
 Write-Host ''
-Write-Host "  Sandbox  : $Name$(if ($isNew) { ' (nouvelle)' } elseif ($recreated) { ' (recréée sur la nouvelle image)' })" -ForegroundColor Cyan
+Write-Host "  Sandbox  : $Name$(if ($isNew) { ' (nouvelle)' })" -ForegroundColor Cyan
 Write-Host "  Dossier  : $Path  ->  /workspace" -ForegroundColor Cyan
 Write-Host "  Client   : $($cfg.Label)   Mode : $mode" -ForegroundColor Cyan
 if ($settingsSrc) {
     $color = if ($settingsInfo -eq $settingsSrc) { 'Cyan' } else { 'Yellow' }
     Write-Host "  Réglages : $settingsInfo" -ForegroundColor $color
+}
+if ($outdated) {
+    Write-Host "  Image    : plus récente disponible, « Mettre à jour les sandboxes » (-Update) pour l'appliquer" -ForegroundColor Yellow
 }
 if ($Yolo) {
     Write-Host "  Attention : l'IA peut modifier ou supprimer tout le contenu de ce dossier." -ForegroundColor Yellow

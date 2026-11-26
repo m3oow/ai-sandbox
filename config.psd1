@@ -1,6 +1,6 @@
 ﻿# Configuration d'ai-sandbox.
-# Après modification : ai-sandbox.ps1 -Rebuild. Les sandboxes existantes sont
-# recréées sur la nouvelle image, en conservant l'historique de leur agent IA.
+# Après modification : ai-sandbox.ps1 -Rebuild, puis -Update pour recréer les
+# sandboxes existantes sur la nouvelle image (historique de l'agent IA conservé).
 @{
     # Image de base des sandboxes (doit être une UBI 10 ou compatible, avec dnf).
     # Par défaut : l'image UBI 10 officielle de Red Hat.

@@ -5,7 +5,7 @@
 #   OnboardingFile : fichier d'état créé pour sauter l'écran d'accueil (facultatif)
 #   StateDir       : dossier d'état du client (historique, sessions, connexion), placé
 #                    dans un volume propre à chaque sandbox : il survit à la recréation
-#                    du conteneur lors d'un -Rebuild
+#                    du conteneur lors d'un -Update
 @{
     claude = @{
         Label          = 'Claude'
